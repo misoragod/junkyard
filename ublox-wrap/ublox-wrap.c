@@ -189,10 +189,10 @@ main (int argc, char *argv[])
 	fprintf (stderr, "Connected to %d\n", fcport);
     }
 
-  fds[0].fd = fcsock;
-  fds[0].events = POLLIN | POLLRDHUP;
-  fds[1].fd = uartfd;
-  fds[1].events = POLLIN;
+  fds[0].fd = uartfd;
+  fds[0].events = POLLIN;
+  fds[1].fd = fcsock;
+  fds[1].events = POLLIN | POLLRDHUP;
 
   last_mark = millis ();
 
@@ -200,7 +200,7 @@ main (int argc, char *argv[])
     {
       fds[0].revents = 0;
       fds[1].revents = 0;
-      rtn = poll (fds, NFDS, -1);
+      rtn = poll (fds, (connected ? NFDS : 1), -1);
       if (rtn == 0)
 	{
 	  /* No inputs from ublox.  Try next baudrate.  */
@@ -215,7 +215,7 @@ main (int argc, char *argv[])
 	  fprintf (stderr, "Failed to poll - %s\n", strerror (errno));
 	  return EXIT_FAILURE;
 	}
-      if ((fds[0].revents & POLLRDHUP) != 0)
+      if (connected && (fds[1].revents & POLLRDHUP) != 0)
 	{
 	  connected = 0;
 	  close (fcsock);
@@ -229,7 +229,7 @@ main (int argc, char *argv[])
 	      return EXIT_FAILURE;
 	    }
 	}
-      if ((fds[1].revents & POLLIN) != 0)
+      if ((fds[0].revents & POLLIN) != 0)
 	{
 	  int n = read (uartfd, buf, BUFSIZE);
 	  if (n <= 0)
@@ -237,7 +237,7 @@ main (int argc, char *argv[])
 	      fprintf (stderr, "Failed to read uart - %s\n", strerror (errno));
 	      return EXIT_FAILURE;
 	    }
-	  if (0&&debug)
+	  if (0&debug)
 	    {
 	      int j;
 	      for (j = 0; j < n; j++)
@@ -274,7 +274,29 @@ main (int argc, char *argv[])
 	  if (connected)
 	    {
 	      rtn = send (fcsock, buf, n, 0);
-	      if (n != rtn)
+	      if (rtn < 0)
+		{
+		  if (errno != ECONNRESET)
+		    {
+		      fprintf (stderr, "Faile to send -%s\n",
+			   strerror (errno));
+		    }
+		  else
+		    {
+		      connected = 0;
+		      	  close (fcsock);
+			  if (debug)
+			    fprintf (stderr, "Disconnected from %d\n", fcport);
+			  fcsock = socket (AF_INET, SOCK_STREAM, 0);
+			  if (fcsock < 0)
+			    {
+			      fprintf (stderr, "Failed to open socket - %s\n",
+				       strerror (errno));
+			      return EXIT_FAILURE;
+			    }
+		    }
+		}
+	      else if (n != rtn)
 		{
 		  fprintf (stderr, "Only %d of %d -%s\n", rtn, n,
 			   strerror (errno));
@@ -282,20 +304,15 @@ main (int argc, char *argv[])
 	    }
 	  sendto (sock, buf, n, 0, (struct sockaddr *) &addr, sizeof (addr));
 	}
-      if ((fds[0].revents & POLLIN) != 0)
+      if (connected && (fds[1].revents & POLLIN) != 0)
 	{
-	  if (connected)
+	  rtn = read (fcsock, &ch, 1);
+	  if (rtn <= 0)
 	    {
-	      rtn = read (fcsock, &ch, 1);
-	      if (rtn <= 0)
-		{
-		  fprintf (stderr, "Failed to read %d - %s\n", fcport,
-			   strerror (errno));
-		  continue;
-		}
+	      fprintf (stderr, "Failed to read %d - %s\n", fcport,
+		       strerror (errno));
+	      continue;
 	    }
-	  else
-	    continue;
 	  write (uartfd, &ch, 1);
 	}
     }
