@@ -96,6 +96,8 @@ main (int argc, char *argv[])
   int ch;
   int opt;
   int debug = 0;
+  int dump_raw = 0;
+  int default_baudrate = 9600;
   int uartfd;
   int sock, fcsock;
   struct sockaddr_in addr, fcaddr;
@@ -104,10 +106,16 @@ main (int argc, char *argv[])
   char *device_path;
   unsigned char buf[BUFSIZE];
 
-  while ((opt = getopt (argc, argv, "dht:u:")) != -1)
+  while ((opt = getopt (argc, argv, "b:Ddht:u:")) != -1)
     {
       switch (opt)
 	{
+	case 'b':
+	  default_baudrate = atoi (optarg);
+	  break;
+	case 'D':
+	  dump_raw = 1;
+	  break;
 	case 'd':
 	  debug = 1;
 	  break;
@@ -119,7 +127,7 @@ main (int argc, char *argv[])
 	  break;
 	case 'h':
 	  fprintf (stderr,
-		   "Usage: %s [-t tcp-port] [-u udp-port] "
+		   "Usage: %s [-d] [-D] [-t tcp-port] [-u udp-port] "
 		   "uart-device-path\n"
 " : A simple tcp wrapper of ublox connected via uart.  Uart tty output from\n"
 " ublox will be copied to tcp and udp ports.  The default tcp and udp port\n"
@@ -131,7 +139,7 @@ main (int argc, char *argv[])
 	  return 0;
 	default: /* '?' */
 	  fprintf (stderr,
-		   "Usage: %s [-u tcp-port] [-u udp-port] "
+		   "Usage: %s [-d] [-D] [-u tcp-port] [-u udp-port] "
 		   "uart-device-path\n",
 		   argv[0]);
 	  return EXIT_FAILURE;
@@ -158,6 +166,7 @@ main (int argc, char *argv[])
       return EXIT_FAILURE;
     }
   set_raw (uartfd);
+  set_speed (uartfd, default_baudrate);
 
   sock = socket (AF_INET, SOCK_DGRAM, 0);
   if (sock < 0)
@@ -237,7 +246,7 @@ main (int argc, char *argv[])
 	      fprintf (stderr, "Failed to read uart - %s\n", strerror (errno));
 	      return EXIT_FAILURE;
 	    }
-	  if (0&debug)
+	  if (dump_raw)
 	    {
 	      int j;
 	      for (j = 0; j < n; j++)
