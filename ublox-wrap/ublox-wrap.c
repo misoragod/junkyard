@@ -55,7 +55,8 @@ millis()
 static int
 nextbaud (void)
 {
-  static const int baudrates[] = { 9600, 19200, 38400, 57600, 115200 };
+  static const int baudrates[] =
+    { 9600, 19200, 38400, 57600, 115200, 230400 };
   static int idx = 0;
 
   idx = (idx + 1) % (sizeof (baudrates) / sizeof (baudrates[0]));
@@ -76,15 +77,18 @@ set_speed (int fd, unsigned int baudrate)
 
 /* Set tty to raw mode.  */
 static void
-set_raw (int fd)
+set_raw (int fd, int flow)
 {
   struct termios t;
   memset (&t, 0, sizeof(t));
 
   tcgetattr (fd, &t);
   t.c_lflag &= ~(ICANON|ECHO|ECHOE|ISIG);
-  t.c_iflag &= ~(BRKINT|ICRNL|INPCK|ISTRIP|IXON);
+  t.c_iflag &= ~(BRKINT|ICRNL|INPCK|ISTRIP|IXON|IXOFF);
   t.c_oflag &= ~OPOST;
+  t.c_cflag &= ~CRTSCTS;
+  if (flow)
+    t.c_cflag |= CRTSCTS;
   tcsetattr (fd, TCSANOW, &t);
 }
 
@@ -97,6 +101,7 @@ main (int argc, char *argv[])
   int opt;
   int debug = 0;
   int dump_raw = 0;
+  int flow = 1;
   int default_baudrate = 9600;
   int uartfd;
   int sock, fcsock;
@@ -106,7 +111,7 @@ main (int argc, char *argv[])
   char *device_path;
   unsigned char buf[BUFSIZE];
 
-  while ((opt = getopt (argc, argv, "b:Ddht:u:")) != -1)
+  while ((opt = getopt (argc, argv, "b:Ddfhnt:u:")) != -1)
     {
       switch (opt)
 	{
@@ -118,6 +123,9 @@ main (int argc, char *argv[])
 	  break;
 	case 'd':
 	  debug = 1;
+	  break;
+	case 'n':
+	  flow = 0;
 	  break;
 	case 't':
 	  fcport = atoi (optarg);
@@ -134,12 +142,13 @@ main (int argc, char *argv[])
 " is 5780 and 5000, respectively, of localhost(127.0.0.1).  TCP inputs are\n"
 " directed to uart and UDP inputs are ignored.  UDP port is intended to be\n"
 " used as the source for GPS daemon and TCP port is intended to be used with\n"
-" ardupilot.  UDP and TCP ports can be specified with -g and -u option.\n",
+" ardupilot.  UDP and TCP ports can be specified with -g and -u option.\n"
+" -n disables hard flow control on tty.  -D enables raw dump for test.\n",
 		   argv[0]);
 	  return 0;
 	default: /* '?' */
 	  fprintf (stderr,
-		   "Usage: %s [-d] [-D] [-u tcp-port] [-u udp-port] "
+		   "Usage: %s [-d] [-D] [-n] [-u tcp-port] [-u udp-port] "
 		   "uart-device-path\n",
 		   argv[0]);
 	  return EXIT_FAILURE;
@@ -165,7 +174,7 @@ main (int argc, char *argv[])
 	       device_path, strerror (errno));
       return EXIT_FAILURE;
     }
-  set_raw (uartfd);
+  set_raw (uartfd, flow);
   set_speed (uartfd, default_baudrate);
 
   sock = socket (AF_INET, SOCK_DGRAM, 0);
