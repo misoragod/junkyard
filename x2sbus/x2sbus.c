@@ -393,6 +393,8 @@ main_loop (void)
 	      state = READ_HEADER;
 	      for (int i = 0; i < SBUS_NUM_CHANNELS; i++)
 		chdata[i] = 0x7fff;
+	      crc = 0;
+	      crc = crc8_array[(crc ^ c) & 0xff];
             }
 	  break;
 	case READ_HEADER:
@@ -401,7 +403,7 @@ main_loop (void)
 	      // Get length
 	      length = c;
 	      ++offset;
-	      crc = 0;
+	      crc = crc8_array[(crc ^ c) & 0xff];
             }
 	  else if (offset == 2)
 	    {
