@@ -101,7 +101,7 @@ main (int argc, char *argv[])
   int opt;
   int debug = 0;
   int dump_raw = 0;
-  int flow = 1;
+  int flow = 0;
   int default_baudrate = 9600;
   int uartfd;
   int sock, fcsock;
