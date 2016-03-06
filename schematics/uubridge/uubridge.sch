@@ -271,24 +271,24 @@ Wire Wire Line
 Wire Wire Line
 	2100 2700 4250 2700
 Wire Wire Line
-	4250 2700 4250 3550
-Wire Wire Line
-	4200 2650 4200 3450
-Wire Wire Line
 	4200 2650 2050 2650
 Wire Wire Line
 	2050 2650 2050 2850
-Text Label 4050 3450 0    30   ~ 0
+Text Label 4050 3350 0    30   ~ 0
 RxD1
-Text Label 4050 3550 0    30   ~ 0
+Text Label 4050 3450 0    30   ~ 0
 TxD1
 Wire Wire Line
 	2400 2500 2400 3500
 Wire Wire Line
 	2700 2500 2700 2450
 Wire Wire Line
-	4250 3550 4100 3550
+	4100 3350 4200 3350
 Wire Wire Line
-	4200 3450 4100 3450
-NoConn ~ 4100 3350
+	4200 3350 4200 2650
+Wire Wire Line
+	4100 3450 4250 3450
+Wire Wire Line
+	4250 3450 4250 2700
+NoConn ~ 4100 3550
 $EndSCHEMATC

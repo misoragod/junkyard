@@ -131,6 +131,14 @@ _start (void)
   LPC_SYSCON->SYSPLLCTRL = 0x24;
   LPC_SYSCON->SYSAHBCLKDIV = 0x02;
 
+#if defined(USE_EXTERNAL_CLOCK)
+  // Enabel CLKIN at PIO0_1 pin
+  LPC_SWM->PINENABLE0 = 0x133;
+  // External 12MHz clock
+  LPC_SYSCON->SYSPLLCLKSEL = 0x03;
+  LPC_SYSCON->SYSPLLCLKUEN = 0x01;
+#endif
+
   LPC_SYSCON->PDRUNCFG &= ~(0x80);
   while (!(LPC_SYSCON->SYSPLLSTAT & 0x01))
     ;
@@ -143,8 +151,10 @@ _start (void)
   // 1 wait state for flash
   LPC_FLASHCTRL->FLASHCFG &= ~(0x03);
 
+#if defined(USE_EXTERNAL_CLOCK)
   // PIO0_1 is an output
   LPC_GPIO_PORT->DIR0 |= 0x02;
+#endif
 
   // Enable SCT and UART0/1 clock
   LPC_SYSCON->SYSAHBCLKCTRL |= (1 << 8)|(3 << 14);
@@ -157,9 +167,9 @@ _start (void)
   // Enable U0-TXD on PIO0_7 PINASSIGN0(7:0)
   LPC_SWM->PINASSIGN0 = 0xffff0607;
   // Enable U1-RTS on PIO0_12 PINASSIGN1(31:24)
-  // Enable U1-RXD on PIO0_9 PINASSIGN1(23:16)
-  // Enable U1-TXD on PIO0_1 PINASSIGN1(15:8)
-  LPC_SWM->PINASSIGN1 = 0x0c0901ff;
+  // Enable U1-RXD on PIO0_8 PINASSIGN1(23:16)
+  // Enable U1-TXD on PIO0_9 PINASSIGN1(15:8)
+  LPC_SWM->PINASSIGN1 = 0x0c0809ff;
   // Enable U1-CTS on PIO0_13 PINASSIGN2(7:0)
   LPC_SWM->PINASSIGN2 = 0xffffff0d;
 

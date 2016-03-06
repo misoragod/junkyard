@@ -118,6 +118,14 @@ _start (void)
   LPC_SYSCON->SYSPLLCTRL = 0x24;
   LPC_SYSCON->SYSAHBCLKDIV = 0x02;
 
+#if defined(USE_EXTERNAL_CLOCK)
+  // Enabel CLKIN at PIO0_1 pin
+  LPC_SWM->PINENABLE0 = 0x133;
+  // External 12MHz clock
+  LPC_SYSCON->SYSPLLCLKSEL = 0x03;
+  LPC_SYSCON->SYSPLLCLKUEN = 0x01;
+#endif
+
   LPC_SYSCON->PDRUNCFG &= ~(0x80);
   while (!(LPC_SYSCON->SYSPLLSTAT & 0x01))
     ;
@@ -130,8 +138,10 @@ _start (void)
   // 1 wait state for flash
   LPC_FLASHCTRL->FLASHCFG &= ~(0x03);
 
+#if defined(USE_EXTERNAL_CLOCK)
   // PIO0_1 is an output
   LPC_GPIO_PORT->DIR0 |= 0x02;
+#endif
 
   // Enable GPIO(6), UART0 and UART1 clock
   LPC_SYSCON->SYSAHBCLKCTRL |= (1 << 6)|(3 << 14);
