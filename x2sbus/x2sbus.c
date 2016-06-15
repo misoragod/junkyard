@@ -173,7 +173,7 @@ _start (void)
   // Enable UART0 intr with NVIC
   NVIC_ISER = (1 << UART0_IRQn);
 
-  // Wait 20ms not to get noise when going on hot start
+  // Wait 200ms not to get noise when going on hot start
   *SYST_RVR = 6000000-1;
   *SYST_CVR = 0;
   *SYST_CSR = 5;

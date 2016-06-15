@@ -2,7 +2,7 @@
 #include <stdbool.h>
 
 extern void _start (void);
-static void stc_handler (void);
+static void sct_handler (void);
 
 static void __attribute__ ((naked))
 reset (void)
@@ -52,7 +52,7 @@ handler vector[48] __attribute__ ((section(".vectors"))) = {
   unexpected,	/* 22: Reserve */
   unexpected,	/* 23: Reserve */
   unexpected,	/* 24: I2C */
-  stc_handler,	/* 25: SCT */
+  sct_handler,	/* 25: SCT */
   unexpected,	/* 26: MRT */
   unexpected,	/* 27: CMP */
   unexpected,	/* 28: WDT */
@@ -67,10 +67,10 @@ handler vector[48] __attribute__ ((section(".vectors"))) = {
 
 #include "lpc8xx.h"
 
-#define STC_IRQn (25-16)
+#define SCT_IRQn (25-16)
 
-// STC counter prescale 1/15 which means 30/15=2MHz clock
-#define STC_CTRL_PRESCALE	(14 << 5)
+// SCT counter prescale 1/15 which means 30/15=2MHz clock
+#define SCT_CTRL_PRESCALE	(14 << 5)
 
 // UART registers bit definitions
 #define UART_STAT_TXRDY (0x1 << 2)
@@ -190,12 +190,12 @@ _start (void)
   // Capture 1 for event 1
   LPC_SCT->CAPCTRL[1].U = 2;
   // Start, clear counter, 1/15 prescale
-  LPC_SCT->CTRL_U = (1 << 3)|STC_CTRL_PRESCALE;
+  LPC_SCT->CTRL_U = (1 << 3)|SCT_CTRL_PRESCALE;
 
-  // Enable STC intr with NVIC
-  NVIC_ISER = 1 << STC_IRQn;
+  // Enable SCT intr with NVIC
+  NVIC_ISER = 1 << SCT_IRQn;
 
-  // Wait 20ms not to get noise when going on hot start
+  // Wait 200ms not to get noise when going on hot start
   *SYST_RVR = 6000000-1;
   *SYST_CVR = 0;
   *SYST_CSR = 5;
@@ -225,7 +225,7 @@ dtoverflow (void)
 }
 
 static void
-stc_handler (void)
+sct_handler (void)
 {
   uint32_t dt, tnow;
   uint32_t ev;
@@ -258,10 +258,10 @@ stc_handler (void)
 	  if (tnow >> 24)
 	    {
 	      // Halt SCT, reset counter and run it again
-	      LPC_SCT->CTRL_U = (1 << 2)|STC_CTRL_PRESCALE;
+	      LPC_SCT->CTRL_U = (1 << 2)|SCT_CTRL_PRESCALE;
 	      tnow = LPC_SCT->COUNT_U - tnow;
 	      LPC_SCT->COUNT_U = tnow;
-	      LPC_SCT->CTRL_U = STC_CTRL_PRESCALE;
+	      LPC_SCT->CTRL_U = SCT_CTRL_PRESCALE;
 	    }
 #endif
 	  tlast = tnow;
