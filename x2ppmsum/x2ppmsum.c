@@ -101,6 +101,7 @@ extern char _bss_start[], _bss_end[];
 
 #define TPAUSE		500
 #define TNUETRAL	1500
+#define TSYNC		4000
 #define TMAX		(100*1000)
 
 // SCT prescaled so as to SCT clock is 2MHz
@@ -255,11 +256,11 @@ uart0_handler (void)
 
 #define PPMSUM_NUM_CHANNELS 8
 
-static uint32_t ppmsum_pw[PPMSUM_NUM_CHANNELS + 1] =
+static uint32_t ppmsum_pw[PPMSUM_NUM_CHANNELS + 2] =
   {
     TNUETRAL, TNUETRAL, TNUETRAL, TNUETRAL,
     TNUETRAL, TNUETRAL, TNUETRAL, TNUETRAL,
-    TMAX
+    TSYNC, TMAX
   };
 static uint32_t pw_index = 0;
 
@@ -270,7 +271,12 @@ sct_handler (void)
 
   ev = LPC_SCT->EVFLAG;
   LPC_SCT->EVFLAG = ev;
-  if (pw_index > PPMSUM_NUM_CHANNELS)
+  if (pw_index == PPMSUM_NUM_CHANNELS + 1)
+    {
+      // SYNC: Don't clear at event 1
+      LPC_SCT->OUT[0].CLR = 0;
+    }
+  else if (pw_index > PPMSUM_NUM_CHANNELS + 1)
     {
       // Halt timer, reset index and disable event 1.
       LPC_SCT->CTRL_U = (1 << 2)|SCT_CTRL_PRESCALE;
@@ -280,8 +286,8 @@ sct_handler (void)
       LPC_SCT->CTRL_U = SCT_CTRL_PRESCALE;
       return;
     }
-  else
-    LPC_SCT->MATCHREL[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
+
+  LPC_SCT->MATCHREL[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
 }
 
 static void
@@ -312,6 +318,7 @@ ppmsum_encode (uint16_t values[])
   LPC_SCT->OUTPUT = 0;
   LPC_SCT->MATCH[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
   LPC_SCT->MATCHREL[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
+  LPC_SCT->OUT[0].CLR = 2;
   LPC_SCT->EVENT[1].STATE = 1;
   LPC_SCT->CTRL_U = SCT_CTRL_PRESCALE;
 }
