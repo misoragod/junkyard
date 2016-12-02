@@ -287,7 +287,7 @@ sct_handler (void)
       return;
     }
 
-  LPC_SCT->MATCHREL[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
+  LPC_SCT->MATCHREL[1].U = usec2ticks (ppmsum_pw[pw_index++]);
 }
 
 static void
@@ -316,8 +316,8 @@ ppmsum_encode (uint16_t values[])
   // clear counter
   LPC_SCT->CTRL_U = (1 << 3)|(1 << 2)|SCT_CTRL_PRESCALE;
   LPC_SCT->OUTPUT = 0;
-  LPC_SCT->MATCH[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
-  LPC_SCT->MATCHREL[1].U = usec2ticks (TPAUSE + ppmsum_pw[pw_index++]);
+  LPC_SCT->MATCH[1].U = usec2ticks (ppmsum_pw[pw_index++]);
+  LPC_SCT->MATCHREL[1].U = usec2ticks (ppmsum_pw[pw_index++]);
   LPC_SCT->OUT[0].CLR = 2;
   LPC_SCT->EVENT[1].STATE = 1;
   LPC_SCT->CTRL_U = SCT_CTRL_PRESCALE;
