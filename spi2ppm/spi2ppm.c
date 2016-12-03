@@ -276,8 +276,8 @@ sct_handler (void)
 static void
 start_ppmsum (volatile uint8_t *regs)
 {
-  if (pw_index != 0)
-    return;
+  // Force reset sequence
+  pw_index = 0;
   
   for (int ch = 0; ch < PPMSUM_NUM_CHANNELS; ch++)
     ppmsum_pw[ch] = le16_val(regs, ch);

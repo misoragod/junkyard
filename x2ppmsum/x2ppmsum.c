@@ -293,8 +293,8 @@ sct_handler (void)
 static void
 ppmsum_encode (uint16_t values[])
 {
-  if (pw_index != 0)
-    return;
+  // Force reset
+  pw_index == 0;
   
   /* Map XBUS range to PPM-sum range.
      XBUS: 0 -> 800us, 0xffff -> 2200us
