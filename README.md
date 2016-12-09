@@ -13,4 +13,10 @@ uubridge: Uart to Uart bridge with LPC8xx.
 
  * Port 0 has a simple auto baud rate detection without flow control.  Port 1 is hardware flow controled and has fixed 230400 baud.
 
+spi2ppm: SPI slave to write PPM-sum out.
+
+ppm2spi: SPI slave to read PPM-sum in.
+
+spi2xbus: SPI slave to write XBUS packet out.
+
 schematics: Schematics of converters
