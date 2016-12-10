@@ -21,6 +21,7 @@
 
 extern void _start (void);
 static void uart0_handler (void);
+static void spi0_handler (void);
 
 static void __attribute__ ((naked))
 reset (void)
@@ -61,7 +62,7 @@ handler vector[48] __attribute__ ((section(".vectors"))) = {
   unexpected, unexpected, /* 12-13 */
   unexpected,	/* 14: Pend SV */
   unexpected,	/* 15: SysTick */
-  unexpected,	/* 16: SPI0 */
+  spi0_handler,	/* 16: SPI0 */
   unexpected,	/* 17: SPI1 */
   unexpected,	/* 18: Reserve */
   uart0_handler,	/* 19: UART0 */
@@ -176,8 +177,8 @@ _start (void)
   // Configure SPI0 as slave
   LPC_SPI0->CFG = SPI_CFG_ENABLE;
 
-  // Enable UART0 intr with NVIC
-  NVIC_ISER = (1 << UART0_IRQn);
+  // Enable SPI0 and UART0 intr with NVIC
+  NVIC_ISER = (1 << SPI0_IRQn)|(1 << UART0_IRQn);
 
   // Wait 200ms not to get noise when going on hot start
   *SYST_RVR = 6000000-1;
@@ -225,7 +226,31 @@ send_uart (uint8_t b)
 }
 
 static volatile uint8_t spiregs[128];
+static volatile uint8_t spi_regdata;
+
 #define FRAME 0x7f
+
+static void
+spi0_handler (void)
+{
+  uint32_t intstat = LPC_SPI0->INTSTAT;
+  if (intstat & SPI_STAT_TXRDY)
+    {
+      LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(15) | spi_regdata;
+    }
+  if (intstat & SPI_STAT_RXRDY)
+    {
+      uint16_t data = LPC_SPI0->RXDAT;
+      uint8_t regno = data >> 8;
+      if (regno & 0x80)
+	{
+	  regno &= 0x7f;
+	  spi_regdata = spiregs[regno];
+	}
+      else
+	spiregs[regno] = data & 0xff;
+    }
+}
 
 #define NUM_CHANNELS 8
 
@@ -332,16 +357,22 @@ xbus (void)
 static void
 main_loop (void)
 {
-  uint16_t data, regno;
-
   // Disable usart0 txrdy inter
   LPC_USART0->INTENCLR = UART_STAT_TXRDY;
+
+#if !defined(USE_SPI_POLLING)
+  // Enable SPI0 inter
+  LPC_SPI0->INTENSET = SPI_STAT_TXRDY|SPI_STAT_RXRDY;
+#endif
 
   // Unmask all interrupts
   asm volatile ("cpsie      i" : : : "memory");
 
   for (;;)
     {
+#if defined(USE_SPI_POLLING)
+      uint16_t data, regno;
+
       while(~LPC_SPI0->STAT & SPI_STAT_TXRDY)
 	;
       LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(15);
@@ -354,5 +385,20 @@ main_loop (void)
 	spiregs[regno] = data;
       else
 	xbus ();
+#else
+      bool eof;
+
+      asm volatile ("cpsid      i" : : : "memory");
+      if (spiregs[FRAME] & 1)
+	{
+	  eof = true;
+	  spiregs[FRAME] &= ~1;
+	}
+      else
+	eof = false;
+      asm volatile ("cpsie      i" : : : "memory");
+      if (eof)
+	xbus();
+#endif
     }
 }

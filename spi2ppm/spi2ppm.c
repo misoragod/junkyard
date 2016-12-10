@@ -21,6 +21,7 @@
 
 extern void _start (void);
 static void sct_handler (void);
+static void spi0_handler (void);
 
 static void __attribute__ ((naked))
 reset (void)
@@ -61,7 +62,7 @@ handler vector[48] __attribute__ ((section(".vectors"))) = {
   unexpected, unexpected, /* 12-13 */
   unexpected,	/* 14: Pend SV */
   unexpected,	/* 15: SysTick */
-  unexpected,	/* 16: SPI0 */
+  spi0_handler,	/* 16: SPI0 */
   unexpected,	/* 17: SPI1 */
   unexpected,	/* 18: Reserve */
   unexpected,	/* 19: UART0 */
@@ -219,8 +220,8 @@ _start (void)
   // Halt, clear counter, 1/15 prescale
   LPC_SCT->CTRL_U = (1 << 3)|(1 << 2)|SCT_CTRL_PRESCALE;
 
-  // Enable SCT intr with NVIC
-  NVIC_ISER = 1 << SCT_IRQn;
+  // Enable SPI0 and SCT intr with NVIC
+  NVIC_ISER = (1 << SPI0_IRQn)|(1 << SCT_IRQn);
 
   // Wait 20ms not to get noise when going on hot start
   *SYST_RVR = 6000000-1;
@@ -233,7 +234,31 @@ _start (void)
 }
 
 static volatile uint8_t spiregs[128];
+static volatile uint8_t spi_regdata;
+
 #define FRAME 0x7f
+
+static void
+spi0_handler (void)
+{
+  uint32_t intstat = LPC_SPI0->INTSTAT;
+  if (intstat & SPI_STAT_TXRDY)
+    {
+      LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(15) | spi_regdata;
+    }
+  if (intstat & SPI_STAT_RXRDY)
+    {
+      uint16_t data = LPC_SPI0->RXDAT;
+      uint8_t regno = data >> 8;
+      if (regno & 0x80)
+	{
+	  regno &= 0x7f;
+	  spi_regdata = spiregs[regno];
+	}
+      else
+	spiregs[regno] = data & 0xff;
+    }
+}
 
 #define PPMSUM_NUM_CHANNELS 8
 
@@ -271,7 +296,7 @@ sct_handler (void)
   LPC_SCT->MATCHREL[1].U = usec2ticks (ppmsum_pw[pw_index++]);
 }
 
-#define le16_val(v, idx) ((int16_t)(((uint16_t)v[2*idx+1] << 8) | v[2*idx]))
+#define leu16_val(v, idx) ((uint16_t)(((uint16_t)v[2*idx+1] << 8) | v[2*idx]))
 
 static void
 start_ppmsum (volatile uint8_t *regs)
@@ -280,7 +305,7 @@ start_ppmsum (volatile uint8_t *regs)
   pw_index = 0;
   
   for (int ch = 0; ch < PPMSUM_NUM_CHANNELS; ch++)
-    ppmsum_pw[ch] = le16_val(regs, ch);
+    ppmsum_pw[ch] = leu16_val(regs, ch);
   
   // Strat PPM-sum sequence
   LPC_SCT->CTRL_U = (1 << 2)|SCT_CTRL_PRESCALE;
@@ -297,16 +322,22 @@ start_ppmsum (volatile uint8_t *regs)
 static void
 main_loop (void)
 {
-  uint16_t data, regno;
-
   // Enable SCT event 1 to request interrupt.
   LPC_SCT->EVEN = (1 << 1);
+
+#if !defined(USE_SPI_POLLING)
+  // Enable SPI0 inter
+  LPC_SPI0->INTENSET = SPI_STAT_TXRDY|SPI_STAT_RXRDY;
+#endif
 
   // Unmask all interrupts
   asm volatile ("cpsie      i" : : : "memory");
 
   for (;;)
     {
+#if defined(USE_SPI_POLLING)
+      uint16_t data, regno;
+
       while(~LPC_SPI0->STAT & SPI_STAT_TXRDY)
 	;
       LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(15);
@@ -323,5 +354,24 @@ main_loop (void)
 	  start_ppmsum (spiregs);
 	  asm volatile ("cpsie      i" : : : "memory");
 	}
+#else
+      bool eof;
+
+      asm volatile ("cpsid      i" : : : "memory");
+      if (spiregs[FRAME] & 1)
+	{
+	  eof = true;
+	  spiregs[FRAME] &= ~1;
+	}
+      else
+	eof = false;
+      asm volatile ("cpsie      i" : : : "memory");
+      if (eof)
+	{
+	  asm volatile ("cpsid      i" : : : "memory");
+	  start_ppmsum (spiregs);
+	  asm volatile ("cpsie      i" : : : "memory");
+	}
+#endif
     }
 }

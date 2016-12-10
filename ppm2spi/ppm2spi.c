@@ -21,6 +21,7 @@
 
 extern void _start (void);
 static void sct_handler (void);
+static void spi0_handler (void);
 
 static void __attribute__ ((naked))
 reset (void)
@@ -61,7 +62,7 @@ handler vector[48] __attribute__ ((section(".vectors"))) = {
   unexpected, unexpected, /* 12-13 */
   unexpected,	/* 14: Pend SV */
   unexpected,	/* 15: SysTick */
-  unexpected,	/* 16: SPI0 */
+  spi0_handler,	/* 16: SPI0 */
   unexpected,	/* 17: SPI1 */
   unexpected,	/* 18: Reserve */
   unexpected,	/* 19: UART0 */
@@ -187,8 +188,8 @@ _start (void)
   // Start, clear counter, 1/15 prescale
   LPC_SCT->CTRL_U = (1 << 3)|SCT_CTRL_PRESCALE;
 
-  // Enable SCT intr with NVIC
-  NVIC_ISER = 1 << SCT_IRQn;
+  // Enable SPI0 and SCT intr with NVIC
+  NVIC_ISER = (1 << SPI0_IRQn)|(1 << SCT_IRQn);
 
   // Wait 20ms not to get noise when going on hot start
   *SYST_RVR = 6000000-1;
@@ -205,8 +206,42 @@ _start (void)
 
 static volatile uint8_t spiregs[128];
 static volatile uint8_t ppm_ready = 0;
+static volatile uint8_t spi_regdata;
 
-#define CPPM_NUM_CHANNELS 16
+#define READY           0x7f
+#define CLEAR_READY     0x7e
+
+static void
+spi0_handler (void)
+{
+  uint32_t intstat = LPC_SPI0->INTSTAT;
+  if (intstat & SPI_STAT_TXRDY)
+    {
+      LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(15) | spi_regdata;
+    }
+  if (intstat & SPI_STAT_RXRDY)
+    {
+      uint16_t rxdat = LPC_SPI0->RXDAT;
+      uint8_t regno = rxdat >> 8;
+      if (regno & 0x80)
+	{
+	  regno &= 0x7f;
+	  if (regno == READY)
+	    spi_regdata = ppm_ready;
+	  else
+	    spi_regdata = spiregs[regno];
+	}
+      else
+	{
+	  if (regno == CLEAR_READY)
+	    ppm_ready = 0;
+	  else
+	    spiregs[regno] = rxdat & 0xff;
+	}
+    }
+}
+
+#define CPPM_NUM_CHANNELS 8
 struct {
   int _channel_counter;
   uint16_t _pulse_capt[CPPM_NUM_CHANNELS];
@@ -221,15 +256,15 @@ ppmsum_pulse (uint16_t width_usec)
     {
       /* A long pulse indicates the end of a frame. Reset the channel
 	 counter so next pulse is channel 0.  */
-      if (ppm_state._channel_counter >= 5)
+      if (ppm_state._channel_counter >= 5 && ppm_ready == 0)
 	{
 	  for (int i = 0; i < ppm_state._channel_counter; i++)
 	    {
 	      spiregs[2*i] = (ppm_state._pulse_capt[i] & 0xff);
 	      spiregs[2*i+1] = (ppm_state._pulse_capt[i] >> 8);
 	    }
+	  ppm_ready = 1;
         }
-      ppm_ready = 1;
       ppm_state._channel_counter = 0;
       return;
     }
@@ -255,13 +290,16 @@ ppmsum_pulse (uint16_t width_usec)
      as unsynchronised, so we wait for a wide pulse.  */
   if (ppm_state._channel_counter == CPPM_NUM_CHANNELS)
     {
-      for (int i = 0; i < CPPM_NUM_CHANNELS; i++)
+      if (ppm_ready == 0)
 	{
-	  spiregs[2*i] = (ppm_state._pulse_capt[i] & 0xff);
-	  spiregs[2*i+1] = (ppm_state._pulse_capt[i] >> 8);
+	  for (int i = 0; i < CPPM_NUM_CHANNELS; i++)
+	    {
+	      spiregs[2*i] = (ppm_state._pulse_capt[i] & 0xff);
+	      spiregs[2*i+1] = (ppm_state._pulse_capt[i] >> 8);
+	    }
+	  ppm_ready = 1;
 	}
 
-      ppm_ready = 1;
       ppm_state._channel_counter = -1;
     }
 }
@@ -333,35 +371,51 @@ sct_handler (void)
     }
 }
 
-#define READY           0x7f
-#define CLEAR_READY     0x7e
-
 static void
 main_loop (void)
 {
+#if defined(USE_SPI_POLLING)
   uint32_t data = 0;
   uint32_t regno;
+#endif
 
   dt_high = dt_low = 0;
+
+#if !defined(USE_SPI_POLLING)
+  // Enable SPI0 inter
+  LPC_SPI0->INTENSET = SPI_STAT_TXRDY|SPI_STAT_RXRDY;
+#endif
 
   // Unmask all interrupts
   asm volatile ("cpsie      i" : : : "memory");
 
   for (;;)
     {
+#if defined(USE_SPI_POLLING)
       while(~LPC_SPI0->STAT & SPI_STAT_TXRDY)
 	;
-      LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(7) | data;
+      LPC_SPI0->TXDATCTL = SPI_TXDATCTL_FLEN(15) | data;
       while(~LPC_SPI0->STAT & SPI_STAT_RXRDY)
 	;
-      regno = LPC_SPI0->RXDAT & 0x7f;
-      if (regno == READY) {
-	data = ppm_ready;
-      } else if (regno == CLEAR_READY) {
-	ppm_ready = 0;
-	data = 0;
-      } else {
-	data = spiregs[regno];
-      }
+      asm volatile ("cpsid      i" : : : "memory");
+      uint32_t rxdat = LPC_SPI0->RXDAT;
+      regno = (rxdat >> 8) & 0x7f;
+      if ((rxdat >> 8) & 0x80)
+	{
+	  if (regno == READY)
+	    data = ppm_ready;
+	  else
+	    data = spiregs[regno];
+	}
+      else
+	{
+	  if (regno == CLEAR_READY)
+	    {
+	      ppm_ready = 0;
+	      data = 0;
+	    }
+	}
+      asm volatile ("cpsie      i" : : : "memory");
+#endif
     }
 }
