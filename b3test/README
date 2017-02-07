@@ -1,0 +1,19 @@
+An example of hachidori server using UDP protocol.   The primary
+purpose of this software is to be a test program for hachidori
+remote sensor/actuator.  It shows hachidori sensor packets with
+human readable forms.  Also it can send packets for the atitude
+control. The atitude computation uses Madgwick AHRS algorithms
+and his implementation in C:
+http://x-io.co.uk/open-source-imu-and-ahrs-algorithms/
+
+The licence of the files other than Madgwick AHRS files is
+3-term BSD which can be seen at the top of each files.
+The program requires /dev/input/js0 of which default sticks
+are allocated as below:
+
+axis 0 - roll axis
+axis 1 - pitch axis
+axis 2 - theottle axis
+axis 3 - yaw axis
+
+The hachidori UDP port is 5790.

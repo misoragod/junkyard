@@ -17,6 +17,12 @@ spi2ppm: SPI slave to write PPM-sum out.
 
 ppm2spi: SPI slave to read PPM-sum in.
 
+spi2up: spi2ppm + uart in/out through SPI.
+
+up2spi: ppm2spi + uart in/out through SPI.
+
 spi2xbus: SPI slave to write XBUS packet out.
+
+b3test: A simple example of hachidori server.
 
 schematics: Schematics of converters
