@@ -34,10 +34,12 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 #include <pthread.h>
 
+#include "b3packet.h"
+
 #include "MadgwickAHRS.h"
 
 #define	MYECHO_PORT 5790
-#define MAXLINE 64
+#define MAXLINE sizeof(struct B3packet)
 
 extern int errno;
 
@@ -238,7 +240,7 @@ paracode (int sockfd)
 {
   int n, clilen;
   struct sockaddr_in cli_addr;
-  unsigned char line[MAXLINE];
+  struct B3packet pkt;
 
   float gx, gy, gz;
   float ax, ay, az;
@@ -276,7 +278,7 @@ paracode (int sockfd)
     {
       clilen = sizeof(cli_addr);
       bzero (&cli_addr, clilen);
-      n = recvfrom(sockfd, line, MAXLINE, 0,
+      n = recvfrom(sockfd, &pkt, MAXLINE, 0,
 		   (struct sockaddr *) &cli_addr, &clilen);
       if (n < 0) {
 	fprintf (stderr, "server: recvfrom error");
@@ -284,19 +286,19 @@ paracode (int sockfd)
       }
 
       // printf ("%d %d\n", sizeof(cli_addr), clilen);
-      // printf ("%d bytes %02x\n", n, line[0]);
-      if (line[0] != 0xb3)
+      // printf ("%d bytes %02x\n", n, pkt.head);
+      if (pkt.head != 0xb3)
 	continue;
-      if (line[1] == 0)
+      if (pkt.tos == TOS_IMU)
 	{
 	  union { float f; uint8_t bytes[sizeof(float)];} uax, uay, uaz;
 	  union { float f; uint8_t bytes[sizeof(float)];} ugx, ugy, ugz;
-	  memcpy (uax.bytes, &line[2], 4);
-	  memcpy (uay.bytes, &line[6], 4);
-	  memcpy (uaz.bytes, &line[10], 4);
-	  memcpy (ugx.bytes, &line[14], 4);
-	  memcpy (ugy.bytes, &line[18], 4);
-	  memcpy (ugz.bytes, &line[22], 4);
+	  memcpy (uax.bytes, &pkt.data[0], 4);
+	  memcpy (uay.bytes, &pkt.data[4], 4);
+	  memcpy (uaz.bytes, &pkt.data[8], 4);
+	  memcpy (ugx.bytes, &pkt.data[12], 4);
+	  memcpy (ugy.bytes, &pkt.data[16], 4);
+	  memcpy (ugz.bytes, &pkt.data[20], 4);
 	  ax = uax.f; ay = uay.f; az = uaz.f;
 	  gx = ugx.f; gy = ugy.f; gz = ugz.f;
 	  if (show_flags & SHOW_RAW_ACC)
@@ -305,12 +307,12 @@ paracode (int sockfd)
 	    printf("gx: %f gy: %f gz: %f\n", gx, gy, gz);
 	  MadgwickAHRSupdateIMU(gx, gy, gz, ax, ay, az);
 	}
-      else if (line[1] == 4)
+      else if (pkt.tos == TOS_MAG)
 	{
 	  union { float f; uint8_t bytes[sizeof(float)];} umx, umy, umz;
-	  memcpy (umx.bytes, &line[2], 4);
-	  memcpy (umy.bytes, &line[6], 4);
-	  memcpy (umz.bytes, &line[10], 4);
+	  memcpy (umx.bytes, &pkt.data[0], 4);
+	  memcpy (umy.bytes, &pkt.data[4], 4);
+	  memcpy (umz.bytes, &pkt.data[8], 4);
 	  mx = umx.f; my = umy.f; mz = umz.f;
 	  if (show_flags & SHOW_RAW_MAG)
 	    printf("mx: %f my: %f mz: %f\n", mx, my, mz);
@@ -318,21 +320,24 @@ paracode (int sockfd)
 	  beta = (count < 1000) ? 2.0f : 0.1f;
 	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, my, mx, -mz);
 	}
-      else if (line[1] == 8)
+      else if (pkt.tos == TOS_BARO)
 	{
 	  union { float f; uint8_t bytes[sizeof(float)];} up, ut, uh;
-	  union { float f; uint8_t bytes[sizeof(float)];} uv, uvb, ucur;
-	  memcpy (up.bytes, &line[2], 4);
-	  memcpy (ut.bytes, &line[6], 4);
-	  memcpy (uh.bytes, &line[10], 4);
-	  memcpy (uv.bytes, &line[14], 4);
-	  memcpy (uvb.bytes, &line[18], 4);
-	  memcpy (ucur.bytes, &line[22], 4);
+	  memcpy (up.bytes, &pkt.data[0], 4);
+	  memcpy (ut.bytes, &pkt.data[4], 4);
+	  memcpy (uh.bytes, &pkt.data[8], 4);
 	  if (show_flags & SHOW_RAW_PRESS)
-	    printf("p: %f t: %f h: %f v:%f\n", up.f, ut.f, uh.f, uv.f);
-	  if (show_flags & SHOW_RAW_BATT)
-	    printf("vbat: %f curr: %f\n", uvb.f, ucur.f);
+	    printf("p: %f t: %f h: %f\n", up.f, ut.f, uh.f);
 	  press = up.f;
+	}
+      else if (pkt.tos == TOS_BAT)
+	{
+	  union { float f; uint8_t bytes[sizeof(float)];} uvb, ucur, uvopt;
+	  memcpy (uvb.bytes, &pkt.data[0], 4);
+	  memcpy (ucur.bytes, &pkt.data[4], 4);
+	  memcpy (uvopt.bytes, &pkt.data[12], 4); // optional
+	  if (show_flags & SHOW_RAW_BATT)
+	    printf("vbat: %f curr: %f (vopt: %f)\n", uvb.f, ucur.f, uvopt.f);
 	}
 
       float a = 0.0f, b = ax, c = ay, d = az;
@@ -448,14 +453,14 @@ paracode (int sockfd)
 		  ydelta);
 #endif
 
-	  line[1] = 64;
-	  bzero (&line[2], 32);
+	  pkt.tos = TOS_PWM;
+	  bzero (&pkt.data[0], B3SIZE);
 	  if (inverted > 20)
 	    {
-	      set_width (&line[2], STICK_LOW);
-	      set_width (&line[4], STICK_LOW);
-	      set_width (&line[6], STICK_LOW);
-	      set_width (&line[8], STICK_LOW);
+	      set_width (&pkt.data[0], STICK_LOW);
+	      set_width (&pkt.data[2], STICK_LOW);
+	      set_width (&pkt.data[4], STICK_LOW);
+	      set_width (&pkt.data[6], STICK_LOW);
 	    }
 	  else
 	    {
@@ -471,12 +476,12 @@ paracode (int sockfd)
 	      last_width[1] = stick + mt[1] + last_adjust[1];
 	      last_width[2] = stick + mt[2] + last_adjust[2];
 	      last_width[3] = stick + mt[3] + last_adjust[3];
-	      set_width (&line[2], last_width[0]);
-	      set_width (&line[4], last_width[1]);
-	      set_width (&line[6], last_width[2]);
-	      set_width (&line[8], last_width[3]);
+	      set_width (&pkt.data[0], last_width[0]);
+	      set_width (&pkt.data[2], last_width[1]);
+	      set_width (&pkt.data[4], last_width[2]);
+	      set_width (&pkt.data[6], last_width[3]);
 	    }
-	  if (sendto (sockfd, line, 34, 0, (struct sockaddr *)&cli_addr,
+	  if (sendto (sockfd, &pkt, 34, 0, (struct sockaddr *)&cli_addr,
 		      clilen) != n)
 	    {
 	      fprintf (stderr, "server: sendto error");
@@ -509,6 +514,24 @@ main (int argc, char *argv[])
     for (s = argv[0]+1; *s != '\0'; s++)
       switch (*s)
 	{
+	case 'h':
+	  printf ("Usage:\n"
+		  "  bb3test [OPTION...]\n"
+		  "\nHelp Options:\n"
+		  "  -h	Show help options\n"
+		  "\nReport options:\n"
+		  "  -A Show raw acceralometer data\n"
+		  "  -G Show raw gyroscope data\n"
+		  "  -M Show raw magnetometer data\n"
+		  "  -P Show raw barometer data\n"
+		  "  -B Show raw battery data\n"
+		  "\nMotor options:\n"
+		  "  -n Disable motor spin\n"
+		  "\nFilter options:\n"
+		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
+		  );
+	  exit (1);
+
 	case 'g':	/* next arg is gain */
 	  if (--argc <=0)
 	    err_quit("-g requires another argument");
@@ -540,7 +563,7 @@ main (int argc, char *argv[])
 	  break;
 
 	default:
-	  err_quit("illegal option");
+	  err_quit("illegal option. Try -h");
 	}
 
   /*
