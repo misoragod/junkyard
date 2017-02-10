@@ -48,6 +48,8 @@ extern int errno;
 #define SHOW_RAW_MAG	4
 #define SHOW_RAW_PRESS	8
 #define SHOW_RAW_BATT  16
+#define SHOW_QUATERNION 32
+#define SHOW_ACCZ	64
 
 static int show_flags;
 
@@ -185,7 +187,7 @@ static float sma_filter(float x, float mem[], size_t n)
   return sum / n;
 }
 
-static bool no_spin = false;
+static bool no_spin = true;
 
 static void set_width (uint8_t *p, float width)
 {
@@ -351,12 +353,14 @@ paracode (int sockfd)
       K = Pm/(Pm + R);
       xhat = xhatm + K*(Az - xhatm);
       P = (1 - K)*Pm;
-      //printf ("accz %7.3f %7.3f\n", xhat, Az);
+      if (show_flags & SHOW_ACCZ)
+	printf ("accz %7.3f\n", xhat + GRAVITY_MSS);
 #if 0
       if (az < -GRAVITY_MSS * 0.6)
 	inverted++;
 #endif
-      //printf ("q0 %7.3f q1 %7.3f q2 %7.3f q3 %7.3f\n", q0, q1, q2, q3);
+      if (show_flags & SHOW_QUATERNION)
+	printf ("q0 %7.3f q1 %7.3f q2 %7.3f q3 %7.3f\n", q0, q1, q2, q3);
       //printf ("should H-up %7.3f R-up %7.3f\r", -(q0*q1+q3*q2), q0*q2-q3*q1);
 
       liftup = !get_button ();
@@ -525,8 +529,10 @@ main (int argc, char *argv[])
 		  "  -M Show raw magnetometer data\n"
 		  "  -P Show raw barometer data\n"
 		  "  -B Show raw battery data\n"
+		  "  -Q Show computed quaternion\n"
+		  "  -Z Show computed vertical accelaration\n"
 		  "\nMotor options:\n"
-		  "  -n Disable motor spin\n"
+		  "  -s Enable motor spin\n"
 		  "\nFilter options:\n"
 		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
 		  );
@@ -538,8 +544,8 @@ main (int argc, char *argv[])
 	  beta = atof(*++argv);
 	  break;
 
-	case 'n':
-	  no_spin = true;
+	case 's':
+	  no_spin = false;
 	  break;
 
 	case 'A':
@@ -560,6 +566,14 @@ main (int argc, char *argv[])
 
 	case 'B':
 	  show_flags |= SHOW_RAW_BATT;
+	  break;
+
+	case 'Q':
+	  show_flags |= SHOW_QUATERNION;
+	  break;
+
+	case 'Z':
+	  show_flags |= SHOW_ACCZ;
 	  break;
 
 	default:
