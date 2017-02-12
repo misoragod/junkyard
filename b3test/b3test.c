@@ -52,6 +52,7 @@ extern int errno;
 #define SHOW_ACCZ	64
 
 static int show_flags;
+static float filter_gain = 0.2f;
 
 /*
  * Read the contents of the socket and write each line back to
@@ -318,9 +319,9 @@ paracode (int sockfd)
 	  mx = umx.f; my = umy.f; mz = umz.f;
 	  if (show_flags & SHOW_RAW_MAG)
 	    printf("mx: %f my: %f mz: %f\n", mx, my, mz);
-	  // mag frame != accell/gyro frame.  Adjust it here.
-	  beta = (count < 1000) ? 2.0f : 0.1f;
-	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, my, mx, -mz);
+	  // Use large gain in early stage so as to accelarate converge
+	  beta = (count < 1000) ? 2.0f : filter_gain;
+	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, mx, my, mz);
 	}
       else if (pkt.tos == TOS_BARO)
 	{
@@ -345,7 +346,7 @@ paracode (int sockfd)
       float a = 0.0f, b = ax, c = ay, d = az;
       qconjugate(&a, &b, &c, &d);
       //d = sma_filter(d, az_mem, AZ_SMA_LEN);
-      Az = d - GRAVITY_MSS;
+      Az = -d - GRAVITY_MSS;
       //printf ("vertical acc %7.3f\n", d);
       xhatm = xhat;
       Pm = P + Q;
@@ -361,7 +362,7 @@ paracode (int sockfd)
 #endif
       if (show_flags & SHOW_QUATERNION)
 	printf ("q0 %7.3f q1 %7.3f q2 %7.3f q3 %7.3f\n", q0, q1, q2, q3);
-      //printf ("should H-up %7.3f R-up %7.3f\r", -(q0*q1+q3*q2), q0*q2-q3*q1);
+      //printf ("should R-up %7.3f H-up %7.3f\r", -(q0*q1+q3*q2), q0*q2-q3*q1);
 
       liftup = !get_button ();
       //printf ("button %d\n", liftup);
@@ -389,8 +390,8 @@ paracode (int sockfd)
 
 	  // These are linear approximations which would be enough for
 	  // our purpose.
-	  hup = -(q0*q1+q3*q2);
-	  rup = q0*q2-q3*q1;
+	  rup = -(q0*q1+q3*q2);
+	  hup = q0*q2-q3*q1;
 
 	  // yaw change
 	  float qDot0, qDot1, qDot2, qDot3;
@@ -413,7 +414,7 @@ paracode (int sockfd)
 	  qp3 = q3;
 
 #if 0
-	  printf ("rup %7.5f hup %7.5f yaw %7.5f accz %7.5f\n",
+	  printf ("rup %7.5f hup %7.5f yaw %7.5f accz %7.5f\r",
 		  rup, hup, ydelta, xhat);
 #endif
 	  d[0] =  ROLL*rup + PITCH*hup + YAW*ydelta; // M1 right head
@@ -471,10 +472,10 @@ paracode (int sockfd)
 	      int mt[4];
 	      int rt, pt, yt;
 	      get_tilt (&rt, &pt, &yt);
-	      mt[0] =  -rt - pt - yt; // M1 right head
-	      mt[1] =   rt + pt - yt; // M2 left  tail
-	      mt[2] =   rt - pt + yt; // M3 left  head
-	      mt[3] =  -rt + pt + yt; // M4 right tail
+	      mt[0] =  -rt + pt + yt; // M1 right head
+	      mt[1] =   rt - pt + yt; // M2 left  tail
+	      mt[2] =   rt + pt - yt; // M3 left  head
+	      mt[3] =  -rt - pt - yt; // M4 right tail
 
 	      last_width[0] = stick + mt[0] + last_adjust[0];
 	      last_width[1] = stick + mt[1] + last_adjust[1];
@@ -541,7 +542,7 @@ main (int argc, char *argv[])
 	case 'g':	/* next arg is gain */
 	  if (--argc <=0)
 	    err_quit("-g requires another argument");
-	  beta = atof(*++argv);
+	  filter_gain = atof(*++argv);
 	  break;
 
 	case 's':
