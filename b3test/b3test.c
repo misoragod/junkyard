@@ -43,13 +43,15 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 extern int errno;
 
-#define SHOW_RAW_ACC	1
-#define SHOW_RAW_GYRO	2
-#define SHOW_RAW_MAG	4
-#define SHOW_RAW_PRESS	8
-#define SHOW_RAW_BATT  16
-#define SHOW_QUATERNION 32
-#define SHOW_ACCZ	64
+#define SHOW_RAW_ACC     (1<<0)
+#define SHOW_RAW_GYRO    (1<<1)
+#define SHOW_RAW_MAG     (1<<2)
+#define SHOW_RAW_PRESS   (1<<3)
+#define SHOW_RAW_BATT    (1<<4)
+#define SHOW_RAW_RANGE   (1<<5)
+#define SHOW_QUATERNION  (1<<6)
+#define SHOW_ACCZ        (1<<7)
+#define SHOW_STREAM      (1<<8)
 
 static int show_flags;
 static float filter_gain = 0.2f;
@@ -342,6 +344,26 @@ paracode (int sockfd)
 	  if (show_flags & SHOW_RAW_BATT)
 	    printf("vbat: %f curr: %f (vopt: %f)\n", uvb.f, ucur.f, uvopt.f);
 	}
+      else if (pkt.tos == TOS_RANGE)
+	{
+	  union { float f; uint8_t bytes[sizeof(float)];} d;
+	  memcpy (d.bytes, &pkt.data[0], 4);
+	  if (show_flags & SHOW_RAW_RANGE)
+	    printf("range: %f\n", d.f);
+	}
+      else if (pkt.tos == TOS_GPS)
+	{
+	  if (show_flags & SHOW_STREAM)
+	    {
+	      int len = pkt.data[0];
+	      if (len <= 30)
+		{
+		  char *s = &pkt.data[1];
+		  while (len--)
+		    putchar(*s++);
+		}
+	    }
+	}
 
       float a = 0.0f, b = ax, c = ay, d = az;
       qconjugate(&a, &b, &c, &d);
@@ -530,6 +552,8 @@ main (int argc, char *argv[])
 		  "  -M Show raw magnetometer data\n"
 		  "  -P Show raw barometer data\n"
 		  "  -B Show raw battery data\n"
+		  "  -R Show raw range data\n"
+		  "  -U Show stream data\n"
 		  "  -Q Show computed quaternion\n"
 		  "  -Z Show computed vertical accelaration\n"
 		  "\nMotor options:\n"
@@ -567,6 +591,14 @@ main (int argc, char *argv[])
 
 	case 'B':
 	  show_flags |= SHOW_RAW_BATT;
+	  break;
+
+	case 'R':
+	  show_flags |= SHOW_RAW_RANGE;
+	  break;
+
+	case 'U':
+	  show_flags |= SHOW_STREAM;
 	  break;
 
 	case 'Q':
