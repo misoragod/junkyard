@@ -34,20 +34,27 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 #include <pthread.h>
 
+#include "b3packet.h"
+
 #include "MadgwickAHRS.h"
 
 #define	MYECHO_PORT 5790
-#define MAXLINE 64
+#define MAXLINE sizeof(struct B3packet)
 
 extern int errno;
 
-#define SHOW_RAW_ACC	1
-#define SHOW_RAW_GYRO	2
-#define SHOW_RAW_MAG	4
-#define SHOW_RAW_PRESS	8
-#define SHOW_RAW_BATT  16
+#define SHOW_RAW_ACC     (1<<0)
+#define SHOW_RAW_GYRO    (1<<1)
+#define SHOW_RAW_MAG     (1<<2)
+#define SHOW_RAW_PRESS   (1<<3)
+#define SHOW_RAW_BATT    (1<<4)
+#define SHOW_RAW_RANGE   (1<<5)
+#define SHOW_QUATERNION  (1<<6)
+#define SHOW_ACCZ        (1<<7)
+#define SHOW_STREAM      (1<<8)
 
 static int show_flags;
+static float filter_gain = 0.2f;
 
 /*
  * Read the contents of the socket and write each line back to
@@ -183,7 +190,7 @@ static float sma_filter(float x, float mem[], size_t n)
   return sum / n;
 }
 
-static bool no_spin = false;
+static bool no_spin = true;
 
 static void set_width (uint8_t *p, float width)
 {
@@ -238,7 +245,7 @@ paracode (int sockfd)
 {
   int n, clilen;
   struct sockaddr_in cli_addr;
-  unsigned char line[MAXLINE];
+  struct B3packet pkt;
 
   float gx, gy, gz;
   float ax, ay, az;
@@ -276,7 +283,7 @@ paracode (int sockfd)
     {
       clilen = sizeof(cli_addr);
       bzero (&cli_addr, clilen);
-      n = recvfrom(sockfd, line, MAXLINE, 0,
+      n = recvfrom(sockfd, &pkt, MAXLINE, 0,
 		   (struct sockaddr *) &cli_addr, &clilen);
       if (n < 0) {
 	fprintf (stderr, "server: recvfrom error");
@@ -284,19 +291,19 @@ paracode (int sockfd)
       }
 
       // printf ("%d %d\n", sizeof(cli_addr), clilen);
-      // printf ("%d bytes %02x\n", n, line[0]);
-      if (line[0] != 0xb3)
+      // printf ("%d bytes %02x\n", n, pkt.head);
+      if (pkt.head != 0xb3)
 	continue;
-      if (line[1] == 0)
+      if (pkt.tos == TOS_IMU)
 	{
 	  union { float f; uint8_t bytes[sizeof(float)];} uax, uay, uaz;
 	  union { float f; uint8_t bytes[sizeof(float)];} ugx, ugy, ugz;
-	  memcpy (uax.bytes, &line[2], 4);
-	  memcpy (uay.bytes, &line[6], 4);
-	  memcpy (uaz.bytes, &line[10], 4);
-	  memcpy (ugx.bytes, &line[14], 4);
-	  memcpy (ugy.bytes, &line[18], 4);
-	  memcpy (ugz.bytes, &line[22], 4);
+	  memcpy (uax.bytes, &pkt.data[0], 4);
+	  memcpy (uay.bytes, &pkt.data[4], 4);
+	  memcpy (uaz.bytes, &pkt.data[8], 4);
+	  memcpy (ugx.bytes, &pkt.data[12], 4);
+	  memcpy (ugy.bytes, &pkt.data[16], 4);
+	  memcpy (ugz.bytes, &pkt.data[20], 4);
 	  ax = uax.f; ay = uay.f; az = uaz.f;
 	  gx = ugx.f; gy = ugy.f; gz = ugz.f;
 	  if (show_flags & SHOW_RAW_ACC)
@@ -305,40 +312,63 @@ paracode (int sockfd)
 	    printf("gx: %f gy: %f gz: %f\n", gx, gy, gz);
 	  MadgwickAHRSupdateIMU(gx, gy, gz, ax, ay, az);
 	}
-      else if (line[1] == 4)
+      else if (pkt.tos == TOS_MAG)
 	{
 	  union { float f; uint8_t bytes[sizeof(float)];} umx, umy, umz;
-	  memcpy (umx.bytes, &line[2], 4);
-	  memcpy (umy.bytes, &line[6], 4);
-	  memcpy (umz.bytes, &line[10], 4);
+	  memcpy (umx.bytes, &pkt.data[0], 4);
+	  memcpy (umy.bytes, &pkt.data[4], 4);
+	  memcpy (umz.bytes, &pkt.data[8], 4);
 	  mx = umx.f; my = umy.f; mz = umz.f;
 	  if (show_flags & SHOW_RAW_MAG)
 	    printf("mx: %f my: %f mz: %f\n", mx, my, mz);
-	  // mag frame != accell/gyro frame.  Adjust it here.
-	  beta = (count < 1000) ? 2.0f : 0.1f;
-	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, my, mx, -mz);
+	  // Use large gain in early stage so as to accelarate converge
+	  beta = (count < 1000) ? 2.0f : filter_gain;
+	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, mx, my, mz);
 	}
-      else if (line[1] == 8)
+      else if (pkt.tos == TOS_BARO)
 	{
 	  union { float f; uint8_t bytes[sizeof(float)];} up, ut, uh;
-	  union { float f; uint8_t bytes[sizeof(float)];} uv, uvb, ucur;
-	  memcpy (up.bytes, &line[2], 4);
-	  memcpy (ut.bytes, &line[6], 4);
-	  memcpy (uh.bytes, &line[10], 4);
-	  memcpy (uv.bytes, &line[14], 4);
-	  memcpy (uvb.bytes, &line[18], 4);
-	  memcpy (ucur.bytes, &line[22], 4);
+	  memcpy (up.bytes, &pkt.data[0], 4);
+	  memcpy (ut.bytes, &pkt.data[4], 4);
+	  memcpy (uh.bytes, &pkt.data[8], 4);
 	  if (show_flags & SHOW_RAW_PRESS)
-	    printf("p: %f t: %f h: %f v:%f\n", up.f, ut.f, uh.f, uv.f);
-	  if (show_flags & SHOW_RAW_BATT)
-	    printf("vbat: %f curr: %f\n", uvb.f, ucur.f);
+	    printf("p: %f t: %f h: %f\n", up.f, ut.f, uh.f);
 	  press = up.f;
+	}
+      else if (pkt.tos == TOS_BAT)
+	{
+	  union { float f; uint8_t bytes[sizeof(float)];} uvb, ucur, uvopt;
+	  memcpy (uvb.bytes, &pkt.data[0], 4);
+	  memcpy (ucur.bytes, &pkt.data[4], 4);
+	  memcpy (uvopt.bytes, &pkt.data[12], 4); // optional
+	  if (show_flags & SHOW_RAW_BATT)
+	    printf("vbat: %f curr: %f (vopt: %f)\n", uvb.f, ucur.f, uvopt.f);
+	}
+      else if (pkt.tos == TOS_RANGE)
+	{
+	  union { float f; uint8_t bytes[sizeof(float)];} d;
+	  memcpy (d.bytes, &pkt.data[0], 4);
+	  if (show_flags & SHOW_RAW_RANGE)
+	    printf("range: %f\n", d.f);
+	}
+      else if (pkt.tos == TOS_GPS)
+	{
+	  if (show_flags & SHOW_STREAM)
+	    {
+	      int len = pkt.data[0];
+	      if (len <= 30)
+		{
+		  char *s = &pkt.data[1];
+		  while (len--)
+		    putchar(*s++);
+		}
+	    }
 	}
 
       float a = 0.0f, b = ax, c = ay, d = az;
       qconjugate(&a, &b, &c, &d);
       //d = sma_filter(d, az_mem, AZ_SMA_LEN);
-      Az = d - GRAVITY_MSS;
+      Az = -d - GRAVITY_MSS;
       //printf ("vertical acc %7.3f\n", d);
       xhatm = xhat;
       Pm = P + Q;
@@ -346,13 +376,15 @@ paracode (int sockfd)
       K = Pm/(Pm + R);
       xhat = xhatm + K*(Az - xhatm);
       P = (1 - K)*Pm;
-      //printf ("accz %7.3f %7.3f\n", xhat, Az);
+      if (show_flags & SHOW_ACCZ)
+	printf ("accz %7.3f\n", xhat + GRAVITY_MSS);
 #if 0
       if (az < -GRAVITY_MSS * 0.6)
 	inverted++;
 #endif
-      //printf ("q0 %7.3f q1 %7.3f q2 %7.3f q3 %7.3f\n", q0, q1, q2, q3);
-      //printf ("should H-up %7.3f R-up %7.3f\r", -(q0*q1+q3*q2), q0*q2-q3*q1);
+      if (show_flags & SHOW_QUATERNION)
+	printf ("q0 %7.3f q1 %7.3f q2 %7.3f q3 %7.3f\n", q0, q1, q2, q3);
+      //printf ("should R-up %7.3f H-up %7.3f\r", -(q0*q1+q3*q2), q0*q2-q3*q1);
 
       liftup = !get_button ();
       //printf ("button %d\n", liftup);
@@ -380,8 +412,8 @@ paracode (int sockfd)
 
 	  // These are linear approximations which would be enough for
 	  // our purpose.
-	  hup = -(q0*q1+q3*q2);
-	  rup = q0*q2-q3*q1;
+	  rup = -(q0*q1+q3*q2);
+	  hup = q0*q2-q3*q1;
 
 	  // yaw change
 	  float qDot0, qDot1, qDot2, qDot3;
@@ -404,7 +436,7 @@ paracode (int sockfd)
 	  qp3 = q3;
 
 #if 0
-	  printf ("rup %7.5f hup %7.5f yaw %7.5f accz %7.5f\n",
+	  printf ("rup %7.5f hup %7.5f yaw %7.5f accz %7.5f\r",
 		  rup, hup, ydelta, xhat);
 #endif
 	  d[0] =  ROLL*rup + PITCH*hup + YAW*ydelta; // M1 right head
@@ -448,35 +480,35 @@ paracode (int sockfd)
 		  ydelta);
 #endif
 
-	  line[1] = 64;
-	  bzero (&line[2], 32);
+	  pkt.tos = TOS_PWM;
+	  bzero (&pkt.data[0], B3SIZE);
 	  if (inverted > 20)
 	    {
-	      set_width (&line[2], STICK_LOW);
-	      set_width (&line[4], STICK_LOW);
-	      set_width (&line[6], STICK_LOW);
-	      set_width (&line[8], STICK_LOW);
+	      set_width (&pkt.data[0], STICK_LOW);
+	      set_width (&pkt.data[2], STICK_LOW);
+	      set_width (&pkt.data[4], STICK_LOW);
+	      set_width (&pkt.data[6], STICK_LOW);
 	    }
 	  else
 	    {
 	      int mt[4];
 	      int rt, pt, yt;
 	      get_tilt (&rt, &pt, &yt);
-	      mt[0] =  -rt - pt - yt; // M1 right head
-	      mt[1] =   rt + pt - yt; // M2 left  tail
-	      mt[2] =   rt - pt + yt; // M3 left  head
-	      mt[3] =  -rt + pt + yt; // M4 right tail
+	      mt[0] =  -rt + pt + yt; // M1 right head
+	      mt[1] =   rt - pt + yt; // M2 left  tail
+	      mt[2] =   rt + pt - yt; // M3 left  head
+	      mt[3] =  -rt - pt - yt; // M4 right tail
 
 	      last_width[0] = stick + mt[0] + last_adjust[0];
 	      last_width[1] = stick + mt[1] + last_adjust[1];
 	      last_width[2] = stick + mt[2] + last_adjust[2];
 	      last_width[3] = stick + mt[3] + last_adjust[3];
-	      set_width (&line[2], last_width[0]);
-	      set_width (&line[4], last_width[1]);
-	      set_width (&line[6], last_width[2]);
-	      set_width (&line[8], last_width[3]);
+	      set_width (&pkt.data[0], last_width[0]);
+	      set_width (&pkt.data[2], last_width[1]);
+	      set_width (&pkt.data[4], last_width[2]);
+	      set_width (&pkt.data[6], last_width[3]);
 	    }
-	  if (sendto (sockfd, line, 34, 0, (struct sockaddr *)&cli_addr,
+	  if (sendto (sockfd, &pkt, 34, 0, (struct sockaddr *)&cli_addr,
 		      clilen) != n)
 	    {
 	      fprintf (stderr, "server: sendto error");
@@ -509,14 +541,36 @@ main (int argc, char *argv[])
     for (s = argv[0]+1; *s != '\0'; s++)
       switch (*s)
 	{
+	case 'h':
+	  printf ("Usage:\n"
+		  "  bb3test [OPTION...]\n"
+		  "\nHelp Options:\n"
+		  "  -h	Show help options\n"
+		  "\nReport options:\n"
+		  "  -A Show raw acceralometer data\n"
+		  "  -G Show raw gyroscope data\n"
+		  "  -M Show raw magnetometer data\n"
+		  "  -P Show raw barometer data\n"
+		  "  -B Show raw battery data\n"
+		  "  -R Show raw range data\n"
+		  "  -U Show stream data\n"
+		  "  -Q Show computed quaternion\n"
+		  "  -Z Show computed vertical accelaration\n"
+		  "\nMotor options:\n"
+		  "  -s Enable motor spin\n"
+		  "\nFilter options:\n"
+		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
+		  );
+	  exit (1);
+
 	case 'g':	/* next arg is gain */
 	  if (--argc <=0)
 	    err_quit("-g requires another argument");
-	  beta = atof(*++argv);
+	  filter_gain = atof(*++argv);
 	  break;
 
-	case 'n':
-	  no_spin = true;
+	case 's':
+	  no_spin = false;
 	  break;
 
 	case 'A':
@@ -539,8 +593,24 @@ main (int argc, char *argv[])
 	  show_flags |= SHOW_RAW_BATT;
 	  break;
 
+	case 'R':
+	  show_flags |= SHOW_RAW_RANGE;
+	  break;
+
+	case 'U':
+	  show_flags |= SHOW_STREAM;
+	  break;
+
+	case 'Q':
+	  show_flags |= SHOW_QUATERNION;
+	  break;
+
+	case 'Z':
+	  show_flags |= SHOW_ACCZ;
+	  break;
+
 	default:
-	  err_quit("illegal option");
+	  err_quit("illegal option. Try -h");
 	}
 
   /*
