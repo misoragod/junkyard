@@ -200,8 +200,8 @@ _start (void)
   // UARTFRGMUL 230400->207, 115200->207, 38400->207, ...
   // BRG        230400->8,   115200->17,  38400->53,  9600->215
   LPC_SYSCON->UARTFRGMULT = 207;
-  // UART0 fixed 115200
-  LPC_USART0->BRG = 17;
+  // UART0 fixed 57600
+  LPC_USART0->BRG = 35;
   // UART0 enabled, 8 bit, no parity, 1 stop bit, no flow control
   LPC_USART0->CFG = 0x05;
 
