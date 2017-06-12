@@ -190,6 +190,7 @@ static float sma_filter(float x, float mem[], size_t n)
   return sum / n;
 }
 
+static bool path_through = false;
 static bool no_spin = true;
 
 static void set_width (uint8_t *p, float width)
@@ -395,9 +396,10 @@ paracode (int sockfd)
 	  int i;
 
 	  float stick;
-	  if (liftup)
+	  if (path_through)
+	    stick = (float) get_stick ();
+	  else if (liftup)
 	    stick = 0.9*stick_last + 0.1*((float) get_stick ());
-	  //stick = (float) get_stick ();
 	  else if (xhat < 0.1f)
 	    stick = stick_last;
 	  else
@@ -499,10 +501,21 @@ paracode (int sockfd)
 	      mt[2] =   rt + pt - yt; // M3 left  head
 	      mt[3] =  -rt - pt - yt; // M4 right tail
 
-	      last_width[0] = stick + mt[0] + last_adjust[0];
-	      last_width[1] = stick + mt[1] + last_adjust[1];
-	      last_width[2] = stick + mt[2] + last_adjust[2];
-	      last_width[3] = stick + mt[3] + last_adjust[3];
+	      if (path_through)
+		{
+		  last_width[0] = stick;
+		  last_width[1] = stick;
+		  last_width[2] = stick;
+		  last_width[3] = stick;
+		}
+	      else
+		{
+		  last_width[0] = stick + mt[0] + last_adjust[0];
+		  last_width[1] = stick + mt[1] + last_adjust[1];
+		  last_width[2] = stick + mt[2] + last_adjust[2];
+		  last_width[3] = stick + mt[3] + last_adjust[3];
+		}
+
 	      set_width (&pkt.data[0], last_width[0]);
 	      set_width (&pkt.data[2], last_width[1]);
 	      set_width (&pkt.data[4], last_width[2]);
@@ -558,6 +571,7 @@ main (int argc, char *argv[])
 		  "  -Z Show computed vertical accelaration\n"
 		  "\nMotor options:\n"
 		  "  -s Enable motor spin\n"
+		  "  -p Pass through joystick to pwm\n"
 		  "\nFilter options:\n"
 		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
 		  );
@@ -567,6 +581,10 @@ main (int argc, char *argv[])
 	  if (--argc <=0)
 	    err_quit("-g requires another argument");
 	  filter_gain = atof(*++argv);
+	  break;
+
+	case 'p':
+	  path_through = true;
 	  break;
 
 	case 's':
