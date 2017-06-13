@@ -22,6 +22,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <netdb.h>
 #include <unistd.h>
@@ -31,6 +32,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include <time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #include <pthread.h>
 
@@ -241,6 +243,8 @@ static float last_width[4];
 #define PITCH 1.0f
 #define YAW 10.0f
 
+static volatile sig_atomic_t interrupted;
+
 void
 paracode (int sockfd)
 {
@@ -287,8 +291,19 @@ paracode (int sockfd)
       n = recvfrom(sockfd, &pkt, MAXLINE, 0,
 		   (struct sockaddr *) &cli_addr, &clilen);
       if (n < 0) {
-	fprintf (stderr, "server: recvfrom error");
-	exit (1);
+	if (interrupted > 0)
+	  {
+	    // Fake packet
+	    pkt.head = 0xb3;
+	    pkt.tos = 0xff;
+	  }
+	else if (errno == EAGAIN)
+	  continue;
+	else
+	  {
+	    fprintf (stderr, "server: recvfrom error");
+	    exit (1);
+	  }
       }
 
       // printf ("%d %d\n", sizeof(cli_addr), clilen);
@@ -484,6 +499,12 @@ paracode (int sockfd)
 
 	  pkt.tos = TOS_PWM;
 	  bzero (&pkt.data[0], B3SIZE);
+	  if (interrupted > 0)
+	    {
+	      no_spin = true;
+	      interrupted++;
+	    }
+
 	  if (inverted > 20)
 	    {
 	      set_width (&pkt.data[0], STICK_LOW);
@@ -527,10 +548,21 @@ paracode (int sockfd)
 	      fprintf (stderr, "server: sendto error");
 	      exit (1);
 	    }
+	  if (interrupted > 1)
+	    {
+	      printf ("interrupted\n");
+	      exit (0);
+	    }
 	}
 
       count++;
     }
+}
+
+static void
+sigint_handler (int p_signame)
+{
+  interrupted = 1;
 }
 
 void
@@ -549,6 +581,9 @@ main (int argc, char *argv[])
   struct sockaddr_in serv_addr;
   struct servent *sp;
   pthread_t pthread;
+
+  if (signal (SIGINT, sigint_handler) == SIG_ERR)
+    err_quit("can't register sigint handler");
 
   while (--argc > 0 && (*++argv)[0] == '-')
     for (s = argv[0]+1; *s != '\0'; s++)
@@ -655,6 +690,9 @@ main (int argc, char *argv[])
       exit (1);
     }
 
+  option = 1;
+  ioctl (sockfd, FIONBIO, &option);
+ 
   pthread_mutex_init(&jsmutex, NULL);
   pthread_create (&pthread, NULL, js_thread, NULL);
   
