@@ -198,17 +198,13 @@ static bool no_spin = true;
 static void set_width (uint8_t *p, float width)
 {
   if (no_spin)
-    {
-      p[0] = 0;
-      p[1] = 0;
-      return;
-    }
+    width = STICK_LOW;
       
   uint16_t w;
   if (width > STICK_HIGH)
     w = STICK_HIGH;
-  else if (width < 0)
-    w = 0;
+  else if (width < STICK_LOW)
+    w = STICK_LOW;
   else
     w = (uint16_t) width;
   p[0] = w >> 8;
