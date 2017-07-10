@@ -54,9 +54,13 @@ extern int errno;
 #define SHOW_QUATERNION  (1<<6)
 #define SHOW_ACCZ        (1<<7)
 #define SHOW_STREAM      (1<<8)
+#define SHOW_STICK       (1<<9)
 
 static int show_flags;
 static float filter_gain = 0.2f;
+
+// Green
+static int rgb_led = 2;
 
 /*
  * Read the contents of the socket and write each line back to
@@ -237,7 +241,7 @@ static float last_width[4];
 #define MAXADJ 250
 #define ROLL 1.0f
 #define PITCH 1.0f
-#define YAW 10.0f
+#define YAW 45.0f
 
 static volatile sig_atomic_t interrupted;
 
@@ -380,7 +384,7 @@ paracode (int sockfd)
       float a = 0.0f, b = ax, c = ay, d = az;
       qconjugate(&a, &b, &c, &d);
       //d = sma_filter(d, az_mem, AZ_SMA_LEN);
-      Az = -d - GRAVITY_MSS;
+      Az = d - GRAVITY_MSS;
       //printf ("vertical acc %7.3f\n", d);
       xhatm = xhat;
       Pm = P + Q;
@@ -421,7 +425,8 @@ paracode (int sockfd)
 	    }
 
 	  stick_last = stick;
-	  //printf ("stick %7.5f\n", stick);
+	  if (show_flags & SHOW_STICK)
+	    printf ("stick: %7.5f\n", stick);
 
 	  // These are linear approximations which would be enough for
 	  // our purpose.
@@ -500,6 +505,11 @@ paracode (int sockfd)
 	      no_spin = true;
 	      interrupted++;
 	    }
+
+	  // RGB LED channels are 13-15
+	  pkt.data[2*13+1] = (rgb_led & 4) ? 255 : 0;
+	  pkt.data[2*14+1] = (rgb_led & 2) ? 255 : 0;
+	  pkt.data[2*15+1] = (rgb_led & 1) ? 255 : 0;
 
 	  if (inverted > 20)
 	    {
@@ -597,12 +607,14 @@ main (int argc, char *argv[])
 		  "  -P Show raw barometer data\n"
 		  "  -B Show raw battery data\n"
 		  "  -R Show raw range data\n"
+		  "  -S Show current stick value\n"
 		  "  -U Show stream data\n"
 		  "  -Q Show computed quaternion\n"
 		  "  -Z Show computed vertical accelaration\n"
 		  "\nMotor options:\n"
 		  "  -s Enable motor spin\n"
 		  "  -p Pass through joystick to pwm\n"
+		  "  -l RGB_VALUE    Set RGB LED value (0-7)\n"
 		  "\nFilter options:\n"
 		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
 		  );
@@ -612,6 +624,12 @@ main (int argc, char *argv[])
 	  if (--argc <=0)
 	    err_quit("-g requires another argument");
 	  filter_gain = atof(*++argv);
+	  break;
+
+	case 'l':	/* next arg is bit set for RGB led */
+	  if (--argc <=0)
+	    err_quit("-l requires another argument");
+	  rgb_led = atoi(*++argv);
 	  break;
 
 	case 'p':
@@ -644,6 +662,10 @@ main (int argc, char *argv[])
 
 	case 'R':
 	  show_flags |= SHOW_RAW_RANGE;
+	  break;
+
+	case 'S':
+	  show_flags |= SHOW_STICK;
 	  break;
 
 	case 'U':
