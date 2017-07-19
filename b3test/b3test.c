@@ -263,6 +263,7 @@ paracode (int sockfd)
   int inverted = 0;
 
   bool liftup = true;
+  bool high_stick_on_starting = false;
 
   float P, Pm;
   float Q = 0.000001f;
@@ -424,6 +425,13 @@ paracode (int sockfd)
 		stick = STICK_LOW;
 	    }
 
+	  if (no_spin == false && count < 1000 && stick > STICK_LOW + 150)
+	    {
+	      printf("stick %f\n", stick);
+	      no_spin = true;
+	      high_stick_on_starting = true;
+	    }
+
 	  stick_last = stick;
 	  if (show_flags & SHOW_STICK)
 	    printf ("stick: %7.5f\n", stick);
@@ -505,49 +513,44 @@ paracode (int sockfd)
 	      no_spin = true;
 	      interrupted++;
 	    }
+	  if (inverted > 20)
+	    {
+	      no_spin = true;
+	    }
 
 	  // RGB LED channels are 13-15
 	  pkt.data[2*13+1] = (rgb_led & 4) ? 255 : 0;
 	  pkt.data[2*14+1] = (rgb_led & 2) ? 255 : 0;
 	  pkt.data[2*15+1] = (rgb_led & 1) ? 255 : 0;
 
-	  if (inverted > 20)
+	  int mt[4];
+	  int rt, pt, yt;
+	  get_tilt (&rt, &pt, &yt);
+	  mt[0] =  -rt + pt + yt; // M1 right head
+	  mt[1] =   rt - pt + yt; // M2 left  tail
+	  mt[2] =   rt + pt - yt; // M3 left  head
+	  mt[3] =  -rt - pt - yt; // M4 right tail
+
+	  if (path_through)
 	    {
-	      set_width (&pkt.data[0], STICK_LOW);
-	      set_width (&pkt.data[2], STICK_LOW);
-	      set_width (&pkt.data[4], STICK_LOW);
-	      set_width (&pkt.data[6], STICK_LOW);
+	      last_width[0] = stick;
+	      last_width[1] = stick;
+	      last_width[2] = stick;
+	      last_width[3] = stick;
 	    }
 	  else
 	    {
-	      int mt[4];
-	      int rt, pt, yt;
-	      get_tilt (&rt, &pt, &yt);
-	      mt[0] =  -rt + pt + yt; // M1 right head
-	      mt[1] =   rt - pt + yt; // M2 left  tail
-	      mt[2] =   rt + pt - yt; // M3 left  head
-	      mt[3] =  -rt - pt - yt; // M4 right tail
-
-	      if (path_through)
-		{
-		  last_width[0] = stick;
-		  last_width[1] = stick;
-		  last_width[2] = stick;
-		  last_width[3] = stick;
-		}
-	      else
-		{
-		  last_width[0] = stick + mt[0] + last_adjust[0];
-		  last_width[1] = stick + mt[1] + last_adjust[1];
-		  last_width[2] = stick + mt[2] + last_adjust[2];
-		  last_width[3] = stick + mt[3] + last_adjust[3];
-		}
-
-	      set_width (&pkt.data[0], last_width[0]);
-	      set_width (&pkt.data[2], last_width[1]);
-	      set_width (&pkt.data[4], last_width[2]);
-	      set_width (&pkt.data[6], last_width[3]);
+	      last_width[0] = stick + mt[0] + last_adjust[0];
+	      last_width[1] = stick + mt[1] + last_adjust[1];
+	      last_width[2] = stick + mt[2] + last_adjust[2];
+	      last_width[3] = stick + mt[3] + last_adjust[3];
 	    }
+
+	  set_width (&pkt.data[0], last_width[0]);
+	  set_width (&pkt.data[2], last_width[1]);
+	  set_width (&pkt.data[4], last_width[2]);
+	  set_width (&pkt.data[6], last_width[3]);
+
 	  if (sendto (sockfd, &pkt, 34, 0, (struct sockaddr *)&cli_addr,
 		      clilen) != n)
 	    {
@@ -558,6 +561,11 @@ paracode (int sockfd)
 	    {
 	      printf ("interrupted\n");
 	      exit (0);
+	    }
+	  if (high_stick_on_starting)
+	    {
+	      printf ("Too high stick on starting\n");
+	      exit (1);
 	    }
 	}
 
