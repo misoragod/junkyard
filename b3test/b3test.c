@@ -67,6 +67,7 @@ static int rgb_led = 2;
  * the sender.
  */
 
+extern bool jsinit;
 extern int *jsaxis;
 extern char *jsbutton;
 extern pthread_mutex_t jsmutex;
@@ -81,13 +82,14 @@ extern void *js_thread (void *);
 #define STICK_LOW	1100
 #define STICK_HIGH	1900
 #define TILT_LIMIT	100
+#define TILT_COEFF	0.1f
 
 static uint16_t
 get_stick(void)
 {
   int val;
-  if (!jsaxis)
-    return 0;
+  if (!jsinit || !jsaxis)
+    return STICK_LOW;
   pthread_mutex_lock (&jsmutex);
   val = jsaxis[THROTTLE_AXIS];
   pthread_mutex_unlock (&jsmutex);
@@ -99,7 +101,7 @@ get_stick(void)
 static void get_tilt(int *r, int *p, int *y)
 {
   int rv, pv, yv;
-  if (!jsaxis)
+  if (!jsinit || !jsaxis)
     {
       *r = *p = *y = 0;
       return;
@@ -425,9 +427,11 @@ paracode (int sockfd)
 		stick = STICK_LOW;
 	    }
 
-	  if (no_spin == false && count < 1000 && stick > STICK_LOW + 150)
+	  if (no_spin == false && !path_through
+	      && count >= (50 * PWM_PERIOD) && count < (100 * PWM_PERIOD)
+	      && stick > STICK_LOW + 150)
 	    {
-	      printf("stick %f\n", stick);
+	      printf("high stick: %f\n", stick);
 	      no_spin = true;
 	      high_stick_on_starting = true;
 	    }
@@ -506,6 +510,10 @@ paracode (int sockfd)
 		  ydelta);
 #endif
 
+	  // Some joystick return unstable values at start
+	  if (count < (50 * PWM_PERIOD))
+	    goto next_cycle;
+
 	  pkt.tos = TOS_PWM;
 	  bzero (&pkt.data[0], B3SIZE);
 	  if (interrupted > 0)
@@ -523,13 +531,13 @@ paracode (int sockfd)
 	  pkt.data[2*14+1] = (rgb_led & 2) ? 255 : 0;
 	  pkt.data[2*15+1] = (rgb_led & 1) ? 255 : 0;
 
-	  int mt[4];
+	  float mt[4];
 	  int rt, pt, yt;
 	  get_tilt (&rt, &pt, &yt);
-	  mt[0] =  -rt + pt + yt; // M1 right head
-	  mt[1] =   rt - pt + yt; // M2 left  tail
-	  mt[2] =   rt + pt - yt; // M3 left  head
-	  mt[3] =  -rt - pt - yt; // M4 right tail
+	  mt[0] =  TILT_COEFF * (-rt + pt + yt); // M1 right head
+	  mt[1] =  TILT_COEFF * ( rt - pt + yt); // M2 left  tail
+	  mt[2] =  TILT_COEFF * ( rt + pt - yt); // M3 left  head
+	  mt[3] =  TILT_COEFF * (-rt - pt - yt); // M4 right tail
 
 	  if (path_through)
 	    {
@@ -569,6 +577,7 @@ paracode (int sockfd)
 	    }
 	}
 
+    next_cycle:
       count++;
     }
 }
@@ -710,7 +719,7 @@ main (int argc, char *argv[])
   serv_addr.sin_addr.s_addr = htonl (INADDR_ANY);
   serv_addr.sin_port = htons (MYECHO_PORT);
 
-  if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+  if (bind (sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
     {
       fprintf (stderr, "server: can't bind local address");
       exit (1);
@@ -719,7 +728,7 @@ main (int argc, char *argv[])
   option = 1;
   ioctl (sockfd, FIONBIO, &option);
  
-  pthread_mutex_init(&jsmutex, NULL);
+  pthread_mutex_init (&jsmutex, NULL);
   pthread_create (&pthread, NULL, js_thread, NULL);
   
   paracode (sockfd);

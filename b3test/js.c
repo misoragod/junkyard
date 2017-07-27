@@ -18,12 +18,14 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <linux/joystick.h>
 
 #define JSDEV "/dev/input/js0"
 
+bool jsinit = false;
 int *jsaxis;
 char *jsbutton;
 pthread_mutex_t jsmutex;
@@ -59,6 +61,9 @@ js_thread (void *p)
 	  usleep(10000);
 	  continue;
 	}
+
+      if (js.type & JS_EVENT_INIT)
+	jsinit = true;
 
       pthread_mutex_lock (&jsmutex);
       switch (js.type & ~JS_EVENT_INIT)
