@@ -55,6 +55,7 @@ extern int errno;
 #define SHOW_ACCZ        (1<<7)
 #define SHOW_STREAM      (1<<8)
 #define SHOW_STICK       (1<<9)
+#define SHOW_BALT        (1<<10)
 
 static int show_flags;
 static float filter_gain = 0.2f;
@@ -172,6 +173,16 @@ qconjugate(float *p0, float *p1, float *p2, float *p3)
     - q2*(b*q0 + d*q2 - c*q3) - q3*(- b*q1 - c*q2 - d*q3);
 }
 
+// Simple Kalman filter
+static void skf(float x, float *xhat, float *P, float Q, float R)
+{
+  float xhatm = *xhat;
+  float Pm = *P + Q;
+  float K = Pm/(Pm + R);
+  *xhat = xhatm + K*(x - xhatm);
+  *P = (1 - K)*Pm;
+}
+
 #if 0
 static inline float dclip(float x)
 {
@@ -200,6 +211,7 @@ static float sma_filter(float x, float mem[], size_t n)
 
 static bool path_through = false;
 static bool no_spin = true;
+static int mot_spin = 0xf;
 
 static void set_width (uint8_t *p, float width)
 {
@@ -226,6 +238,7 @@ static void set_width (uint8_t *p, float width)
 #define MIN_WIDTH ((float) STICK_MIN)
 #define PGAIN 0.8f
 #define DGAIN 32.00f
+#define GCOEFF 80.0f
 #define ATT 0.1f
 #define BCOUNT 10
 #define IGAIN 0.01f
@@ -243,7 +256,7 @@ static float last_width[4];
 #define MAXADJ 250
 #define ROLL 1.0f
 #define PITCH 1.0f
-#define YAW 45.0f
+#define YAW 10.0f
 
 static volatile sig_atomic_t interrupted;
 
@@ -258,7 +271,8 @@ paracode (int sockfd)
   float ax, ay, az;
   float mx = 0.0f, my = 0.0f, mz = 0.0f;
 
-  float press;
+  float pressP, presshat;
+  float press, press_base = 0.0f;
 
   int count = 0;
 
@@ -267,12 +281,7 @@ paracode (int sockfd)
   bool liftup = true;
   bool high_stick_on_starting = false;
 
-  float P, Pm;
-  float Q = 0.000001f;
-  float R = 0.01f;
-  float K;
-  float xhat = 0.0f, xhatm;
-  float v = 0.0f;
+  float AzP, Azhat;
   float Az = 0.0f;
 
   // time
@@ -353,6 +362,12 @@ paracode (int sockfd)
 	  if (show_flags & SHOW_RAW_PRESS)
 	    printf("p: %f t: %f h: %f\n", up.f, ut.f, uh.f);
 	  press = up.f;
+	  if (press_base == 0.0f)
+	    press_base = press;
+	  skf(press - press_base, &presshat, &pressP, 0.02f, 0.1f);
+	  // 1pa = ~9cm
+	  if (show_flags & SHOW_BALT)
+	    printf ("estimated alt %7.3fcm\n", -presshat*9);
 	}
       else if (pkt.tos == TOS_BAT)
 	{
@@ -389,14 +404,9 @@ paracode (int sockfd)
       //d = sma_filter(d, az_mem, AZ_SMA_LEN);
       Az = d - GRAVITY_MSS;
       //printf ("vertical acc %7.3f\n", d);
-      xhatm = xhat;
-      Pm = P + Q;
-
-      K = Pm/(Pm + R);
-      xhat = xhatm + K*(Az - xhatm);
-      P = (1 - K)*Pm;
+      skf(Az, &Azhat, &AzP, 0.000001f, 0.01f);
       if (show_flags & SHOW_ACCZ)
-	printf ("accz %7.3f\n", xhat + GRAVITY_MSS);
+	printf ("accz %7.3f\n", Azhat + GRAVITY_MSS);
 #if 0
       if (az < -GRAVITY_MSS * 0.6)
 	inverted++;
@@ -405,7 +415,8 @@ paracode (int sockfd)
 	printf ("q0 %7.3f q1 %7.3f q2 %7.3f q3 %7.3f\n", q0, q1, q2, q3);
       //printf ("should R-up %7.3f H-up %7.3f\r", -(q0*q1+q3*q2), q0*q2-q3*q1);
 
-      liftup = !get_button ();
+      if (liftup && get_button ())
+	liftup = false;
       //printf ("button %d\n", liftup);
 
       if ((count % PWM_PERIOD) == 0)
@@ -418,8 +429,6 @@ paracode (int sockfd)
 	    stick = (float) get_stick ();
 	  else if (liftup)
 	    stick = 0.9*stick_last + 0.1*((float) get_stick ());
-	  else if (xhat < 0.1f)
-	    stick = stick_last;
 	  else
 	    {
 	      stick = (1-DRATE)*stick_last + DRATE*MIN_WIDTH;
@@ -483,7 +492,7 @@ paracode (int sockfd)
 		  float dv = dp[i]-d[i];
 		  dp[i] = d[i];
 		  dd[i] = dv;
-		  adj = (1-ATT)*(pv*PGAIN-dv*DGAIN)*200.0f + ATT*adj;
+		  adj = (1-ATT)*(pv*PGAIN-dv*DGAIN)*GCOEFF + ATT*adj;
 		  if (adj > MAXADJ)
 		    adj = MAXADJ;
 		  else if (adj < -MAXADJ)
@@ -541,10 +550,14 @@ paracode (int sockfd)
 
 	  if (path_through)
 	    {
-	      last_width[0] = stick;
-	      last_width[1] = stick;
-	      last_width[2] = stick;
-	      last_width[3] = stick;
+	      if (mot_spin & (1 << 0))
+		last_width[0] = stick;
+	      if (mot_spin & (1 << 1))
+		last_width[1] = stick;
+	      if (mot_spin & (1 << 2))
+		last_width[2] = stick;
+	      if (mot_spin & (1 << 3))
+		last_width[3] = stick;
 	    }
 	  else
 	    {
@@ -628,6 +641,7 @@ main (int argc, char *argv[])
 		  "  -U Show stream data\n"
 		  "  -Q Show computed quaternion\n"
 		  "  -Z Show computed vertical accelaration\n"
+		  "  -b Show barometer estimated altitude\n"
 		  "\nMotor options:\n"
 		  "  -s Enable motor spin\n"
 		  "  -p Pass through joystick to pwm\n"
@@ -651,6 +665,16 @@ main (int argc, char *argv[])
 
 	case 'p':
 	  path_through = true;
+	  switch (*(s+1))
+	    {
+	    case '0': mot_spin = 1<<0; s++; break;
+	    case '1': mot_spin = 1<<1; s++; break;
+	    case '2': mot_spin = 1<<2; s++; break;
+	    case '3': mot_spin = 1<<3; s++; break;
+	    default:
+	      mot_spin = 0xf;
+	      break;
+	    }
 	  break;
 
 	case 's':
@@ -695,6 +719,10 @@ main (int argc, char *argv[])
 
 	case 'Z':
 	  show_flags |= SHOW_ACCZ;
+	  break;
+
+	case 'b':
+	  show_flags |= SHOW_BALT;
 	  break;
 
 	default:
