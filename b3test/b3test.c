@@ -33,6 +33,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <math.h>
 
 #include <pthread.h>
 
@@ -56,6 +57,7 @@ extern int errno;
 #define SHOW_STREAM      (1<<8)
 #define SHOW_STICK       (1<<9)
 #define SHOW_BALT        (1<<10)
+#define SHOW_YAW         (1<<11)
 
 static int show_flags;
 static float filter_gain = 0.2f;
@@ -350,7 +352,7 @@ paracode (int sockfd)
 	  if (show_flags & SHOW_RAW_MAG)
 	    printf("mx: %f my: %f mz: %f\n", mx, my, mz);
 	  // Use large gain in early stage so as to accelarate converge
-	  beta = (count < 1000) ? 2.0f : filter_gain;
+	  beta = (count < 2000) ? 16.0f : filter_gain;
 	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, mx, my, mz);
 	}
       else if (pkt.tos == TOS_BARO)
@@ -468,6 +470,15 @@ paracode (int sockfd)
 	      ydelta = -q3*qDot0 - q2*qDot1 + q1*qDot2 + q0*qDot3;
 	    }
 	  //printf ("yaw %7.5f\n", ydelta);
+	  if (show_flags & SHOW_YAW)
+	    {
+	      float relyaw =  4*atan2f(q2, q1);
+	      relyaw = fmodf(relyaw, 2*M_PI);
+	      if (relyaw < 0)
+		relyaw += 2*M_PI;
+	      relyaw -= M_PI;
+	      printf ("yaw: %7.5f\n", relyaw);
+	    }
 
 	  qp0 = q0;
 	  qp1 = q1;
@@ -641,6 +652,7 @@ main (int argc, char *argv[])
 		  "  -U Show stream data\n"
 		  "  -Q Show computed quaternion\n"
 		  "  -Z Show computed vertical accelaration\n"
+		  "  -Y Show computed yaw (rad.)\n"
 		  "  -b Show barometer estimated altitude\n"
 		  "\nMotor options:\n"
 		  "  -s Enable motor spin\n"
@@ -715,6 +727,10 @@ main (int argc, char *argv[])
 
 	case 'Q':
 	  show_flags |= SHOW_QUATERNION;
+	  break;
+
+	case 'Y':
+	  show_flags |= SHOW_YAW;
 	  break;
 
 	case 'Z':
