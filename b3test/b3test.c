@@ -241,7 +241,7 @@ static void set_width (uint8_t *p, float width)
 #define MIN_WIDTH ((float) STICK_MIN)
 #define PGAIN 0.8f
 #define DGAIN 32.00f
-#define GCOEFF 400.0f
+#define GCOEFF 80.0f
 #define ATT 0.1f
 #define BCOUNT 10
 #define IGAIN 0.01f
