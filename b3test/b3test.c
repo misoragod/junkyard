@@ -265,7 +265,7 @@ static float last_width[4];
 #define ROLL 1.0f
 #define PITCH 1.0f
 #define YAW 1.0f
-#define YAWERR_LIMIT 0.2f
+#define YAWERR_LIMIT 0.4f
 
 static volatile sig_atomic_t interrupted;
 
@@ -480,7 +480,7 @@ paracode (int sockfd)
 		  && (Azhat < 1.0 && Azhat > - 1.0)))
 	    yawerr = 0.0f;
 	  else
-	    yawerr = target_yaw_re * q2 - target_yaw_im * q1;
+	    yawerr = 4*(target_yaw_re * q2 - target_yaw_im * q1);
 
 	  if (show_flags & SHOW_YAW)
 	    printf ("yaw: %7.5f err: %7.5f\n", 4*atan2f(q2, q1), yawerr);
