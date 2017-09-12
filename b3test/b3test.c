@@ -214,6 +214,7 @@ static float sma_filter(float x, float mem[], size_t n)
 static bool path_through = false;
 static bool no_spin = true;
 static int mot_spin = 0xf;
+static int mot_trim[4];
 
 static void set_width (uint8_t *p, float width)
 {
@@ -240,7 +241,7 @@ static void set_width (uint8_t *p, float width)
 #define MIN_WIDTH ((float) STICK_MIN)
 #define PGAIN 0.8f
 #define DGAIN 32.00f
-#define GCOEFF 80.0f
+#define GCOEFF 400.0f
 #define ATT 0.1f
 #define BCOUNT 10
 #define IGAIN 0.01f
@@ -248,6 +249,11 @@ static void set_width (uint8_t *p, float width)
 #define HEPSILON 0.02f
 #define DRATE (1.0f - 0.9965403f)
 #define DDGAIN 50.0f
+
+static float control_gain = GCOEFF;
+
+#define FILTER_CONVERGE_COUNT 2000
+#define FILTER_STABILIZE_COUNT 3000
 
 static float base_adjust[4];
 static float last_adjust[4];
@@ -258,7 +264,8 @@ static float last_width[4];
 #define MAXADJ 250
 #define ROLL 1.0f
 #define PITCH 1.0f
-#define YAW 10.0f
+#define YAW 1.0f
+#define YAWERR_LIMIT 0.2f
 
 static volatile sig_atomic_t interrupted;
 
@@ -273,6 +280,8 @@ paracode (int sockfd)
   float ax, ay, az;
   float mx = 0.0f, my = 0.0f, mz = 0.0f;
 
+  float target_yaw_re = 1.0f, target_yaw_im = 0.0f;
+
   float pressP, presshat;
   float press, press_base = 0.0f;
 
@@ -283,14 +292,13 @@ paracode (int sockfd)
   bool liftup = true;
   bool high_stick_on_starting = false;
 
-  float AzP, Azhat;
+  float AzP, Azhat = 0.0f;
   float Az = 0.0f;
 
   // time
   int tlast = 0, tnow;
   //
   float dp[4], di[4], dd[4];
-  float qp0 = 1.0f, qp1 = 0.0f, qp2 = 0.0f, qp3 = 0.0f;
   //
   float stick_last = STICK_LOW;
 
@@ -352,7 +360,7 @@ paracode (int sockfd)
 	  if (show_flags & SHOW_RAW_MAG)
 	    printf("mx: %f my: %f mz: %f\n", mx, my, mz);
 	  // Use large gain in early stage so as to accelarate converge
-	  beta = (count < 2000) ? 16.0f : filter_gain;
+	  beta = (count < FILTER_CONVERGE_COUNT) ? 16.0f : filter_gain;
 	  MadgwickAHRSupdate(gx, gy, gz, ax, ay, az, mx, my, mz);
 	}
       else if (pkt.tos == TOS_BARO)
@@ -423,7 +431,7 @@ paracode (int sockfd)
 
       if ((count % PWM_PERIOD) == 0)
 	{
-	  float rup, hup, ydelta, d[NUM_MOTORS];
+	  float rup, hup, yawerr, d[NUM_MOTORS];
 	  int i;
 
 	  float stick;
@@ -456,43 +464,41 @@ paracode (int sockfd)
 	  rup = -(q0*q1+q3*q2);
 	  hup = q0*q2-q3*q1;
 
-	  // yaw change
-	  float qDot0, qDot1, qDot2, qDot3;
-	  qDot0 = q0 - qp0;
-	  qDot1 = q1 - qp1;
-	  qDot2 = q2 - qp2;
-	  qDot3 = q3 - qp3;
-	  if (qp0 == 1.0f)
-	    ydelta = 0;
+	  // Estimate yaw change.  Again very rough approximation only
+	  // when the frame is almost holizontal.  Perhaps we require
+	  // more presice values for the better estimation.
+	  if (count == FILTER_STABILIZE_COUNT)
+	    {
+	      target_yaw_re = q1;
+	      target_yaw_im = q2;
+	    }
+	  // Don't count yawerr before stabilize or maybe landed
+	  if (count < FILTER_STABILIZE_COUNT
+	      || (stick < STICK_LOW + 100
+		  && (hup < 0.01 && hup > -0.01)
+		  && (rup < 0.01 && rup > -0.01)
+		  && (Azhat < 1.0 && Azhat > - 1.0)))
+	    yawerr = 0.0f;
 	  else
-	    {
-	      // yaw speed = 2 * qDot * qBar
-	      ydelta = -q3*qDot0 - q2*qDot1 + q1*qDot2 + q0*qDot3;
-	    }
-	  //printf ("yaw %7.5f\n", ydelta);
-	  if (show_flags & SHOW_YAW)
-	    {
-	      float relyaw =  4*atan2f(q2, q1);
-	      relyaw = fmodf(relyaw, 2*M_PI);
-	      if (relyaw < 0)
-		relyaw += 2*M_PI;
-	      relyaw -= M_PI;
-	      printf ("yaw: %7.5f\n", relyaw);
-	    }
+	    yawerr = target_yaw_re * q2 - target_yaw_im * q1;
 
-	  qp0 = q0;
-	  qp1 = q1;
-	  qp2 = q2;
-	  qp3 = q3;
+	  if (show_flags & SHOW_YAW)
+	    printf ("yaw: %7.5f err: %7.5f\n", 4*atan2f(q2, q1), yawerr);
 
 #if 0
-	  printf ("rup %7.5f hup %7.5f yaw %7.5f accz %7.5f\r",
-		  rup, hup, ydelta, xhat);
+	  printf ("rup %7.5f hup %7.5f yaw %7.5f accz %7.5f\n",
+		  rup, hup, yawerr, Azhat);
 #endif
-	  d[0] =  ROLL*rup + PITCH*hup + YAW*ydelta; // M1 right head
-	  d[1] = -ROLL*rup - PITCH*hup + YAW*ydelta; // M2 left  tail
-	  d[2] = -ROLL*rup + PITCH*hup - YAW*ydelta; // M3 left  head
-	  d[3] =  ROLL*rup - PITCH*hup - YAW*ydelta; // M4 right tail
+	  // Clamp yawerr
+	  if (yawerr < -YAWERR_LIMIT)
+	    yawerr = -YAWERR_LIMIT;
+	  else if (yawerr > YAWERR_LIMIT)
+	    yawerr = YAWERR_LIMIT;
+
+	  d[0] =  ROLL*rup + PITCH*hup + YAW*yawerr; // M1 right head
+	  d[1] = -ROLL*rup - PITCH*hup + YAW*yawerr; // M2 left  tail
+	  d[2] = -ROLL*rup + PITCH*hup - YAW*yawerr; // M3 left  head
+	  d[3] =  ROLL*rup - PITCH*hup - YAW*yawerr; // M4 right tail
 
 	  for (i = 0; i < NUM_CHANNELS; i++)
 	    {
@@ -503,7 +509,7 @@ paracode (int sockfd)
 		  float dv = dp[i]-d[i];
 		  dp[i] = d[i];
 		  dd[i] = dv;
-		  adj = (1-ATT)*(pv*PGAIN-dv*DGAIN)*GCOEFF + ATT*adj;
+		  adj = (1-ATT)*(pv*PGAIN-dv*DGAIN)*control_gain + ATT*adj;
 		  if (adj > MAXADJ)
 		    adj = MAXADJ;
 		  else if (adj < -MAXADJ)
@@ -527,7 +533,7 @@ paracode (int sockfd)
 		  last_adjust[2],
 		  last_adjust[3],
 		  hup, rup,
-		  ydelta);
+		  yawerr);
 #endif
 
 	  // Some joystick return unstable values at start
@@ -559,7 +565,8 @@ paracode (int sockfd)
 	  mt[2] =  TILT_COEFF * ( rt + pt - yt); // M3 left  head
 	  mt[3] =  TILT_COEFF * (-rt - pt - yt); // M4 right tail
 
-	  if (path_through)
+	  if (path_through
+	      || count < FILTER_STABILIZE_COUNT)
 	    {
 	      if (mot_spin & (1 << 0))
 		last_width[0] = stick;
@@ -572,10 +579,10 @@ paracode (int sockfd)
 	    }
 	  else
 	    {
-	      last_width[0] = stick + mt[0] + last_adjust[0];
-	      last_width[1] = stick + mt[1] + last_adjust[1];
-	      last_width[2] = stick + mt[2] + last_adjust[2];
-	      last_width[3] = stick + mt[3] + last_adjust[3];
+	      last_width[0] = stick + mt[0] + last_adjust[0] + mot_trim[0];
+	      last_width[1] = stick + mt[1] + last_adjust[1] + mot_trim[1];
+	      last_width[2] = stick + mt[2] + last_adjust[2] + mot_trim[2];
+	      last_width[3] = stick + mt[3] + last_adjust[3] + mot_trim[3];
 	    }
 
 	  set_width (&pkt.data[0], last_width[0]);
@@ -657,11 +664,20 @@ main (int argc, char *argv[])
 		  "\nMotor options:\n"
 		  "  -s Enable motor spin\n"
 		  "  -p Pass through joystick to pwm\n"
+		  "  -p[0-3] Spin moter[0-3] only with pass through\n"
 		  "  -l RGB_VALUE    Set RGB LED value (0-7)\n"
+		  "  -t[0-3] INT_VALUE  Set motor[0-3] trim value(-50 to 50)\n"
 		  "\nFilter options:\n"
 		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
+		  "  -c FLOAT_VALUE  Set control gain to FLOAT_VALUE\n"
 		  );
 	  exit (1);
+
+	case 'c':	/* next arg is gain */
+	  if (--argc <=0)
+	    err_quit("-c requires another argument");
+	  control_gain = atof(*++argv);
+	  break;
 
 	case 'g':	/* next arg is gain */
 	  if (--argc <=0)
@@ -685,6 +701,26 @@ main (int argc, char *argv[])
 	    case '3': mot_spin = 1<<3; s++; break;
 	    default:
 	      mot_spin = 0xf;
+	      break;
+	    }
+	  break;
+
+	case 't':
+	  if (--argc <=0)
+	    err_quit("-t[0-3] requires another argument");
+	  int trim = atoi(*++argv);
+	  if (trim > 50)
+	    trim = 50;
+	  else if (trim < -50)
+	    trim = -50;
+	  switch (*(s+1))
+	    {
+	    case '0': mot_trim[0] = trim; s++; break;
+	    case '1': mot_trim[1] = trim; s++; break;
+	    case '2': mot_trim[2] = trim; s++; break;
+	    case '3': mot_trim[3] = trim; s++; break;
+	    default:
+	      err_quit("illegal moter number");
 	      break;
 	    }
 	  break;
