@@ -1,0 +1,6 @@
+An another example of hachidori server using UDP protocol.
+The purpose of this software is to access NVS of hachidori
+remote sensor/actuator.
+
+The licence of the files is 3-term BSD which can be seen
+at the top of each files.
