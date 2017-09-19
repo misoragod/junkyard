@@ -1,4 +1,4 @@
-obj= b3test.o js.o MadgwickAHRS.o
+obj= b3test.o js.o altfilt.o MadgwickAHRS.o
 src= $(obj:.c=.o)
 
 CFLAGS= -g

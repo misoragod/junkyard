@@ -40,6 +40,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include "b3packet.h"
 
 #include "MadgwickAHRS.h"
+#include "altfilt.h"
 
 #define	MYECHO_PORT 5790
 #define MAXLINE sizeof(struct B3packet)
@@ -56,7 +57,7 @@ extern int errno;
 #define SHOW_ACCZ        (1<<7)
 #define SHOW_STREAM      (1<<8)
 #define SHOW_STICK       (1<<9)
-#define SHOW_BALT        (1<<10)
+#define SHOW_VERT        (1<<10)
 #define SHOW_YAW         (1<<11)
 
 static int show_flags;
@@ -83,6 +84,7 @@ extern void *js_thread (void *);
 #define TRIG_BUTTON	0
 #define STICK_MIN	900
 #define STICK_LOW	1100
+#define STICK_MID	1500
 #define STICK_HIGH	1900
 #define TILT_LIMIT	100
 #define TILT_COEFF	0.1f
@@ -267,6 +269,11 @@ static float last_width[4];
 #define YAW 1.0f
 #define YAWERR_LIMIT 0.4f
 
+static bool althold = true;
+static float target_alt = 100.0f;
+static float base_alt_adjust;
+static float last_alt_adjust;
+
 static volatile sig_atomic_t interrupted;
 
 void
@@ -282,8 +289,8 @@ paracode (int sockfd)
 
   float target_yaw_re = 1.0f, target_yaw_im = 0.0f;
 
-  float pressP, presshat;
   float press, press_base = 0.0f;
+  float balt = 0.0f;
 
   int count = 0;
 
@@ -292,7 +299,7 @@ paracode (int sockfd)
   bool liftup = true;
   bool high_stick_on_starting = false;
 
-  float AzP, Azhat = 0.0f;
+  float AzP = 0.0f, Azhat = 0.0f;
   float Az = 0.0f;
 
   // time
@@ -300,7 +307,10 @@ paracode (int sockfd)
   //
   float dp[4], di[4], dd[4];
   //
+  float altp = 0.0f, altd = 0.0f;
+  //
   float stick_last = STICK_LOW;
+  float stick_adj = 0.0f;
 
   dp[0] = dp[1] = dp[2] = dp[3] = 0.0f;
   dd[0] = dd[1] = dd[2] = dd[3] = 0.0f;
@@ -374,10 +384,8 @@ paracode (int sockfd)
 	  press = up.f;
 	  if (press_base == 0.0f)
 	    press_base = press;
-	  skf(press - press_base, &presshat, &pressP, 0.02f, 0.1f);
 	  // 1pa = ~9cm
-	  if (show_flags & SHOW_BALT)
-	    printf ("estimated alt %7.3fcm\n", -presshat*9);
+	  balt = (press_base - press)*0.09;
 	}
       else if (pkt.tos == TOS_BAT)
 	{
@@ -417,6 +425,18 @@ paracode (int sockfd)
       skf(Az, &Azhat, &AzP, 0.000001f, 0.01f);
       if (show_flags & SHOW_ACCZ)
 	printf ("accz %7.3f\n", Azhat + GRAVITY_MSS);
+
+      // baro update rate is 50Hz
+      if (count == FILTER_STABILIZE_COUNT)
+	altFinit(Az);
+      else if (count > FILTER_STABILIZE_COUNT
+	  && pkt.tos == TOS_BARO)
+	{
+	  altFupdate(balt, Az, 0.02);
+	  if (show_flags & SHOW_VERT)
+	    printf ("alt %7.1fcm balt %7.1fcm vvelo %7.1fcm/s\n",
+		    vertical_position*100, balt*100, vertical_velocity*100);
+	}
 #if 0
       if (az < -GRAVITY_MSS * 0.6)
 	inverted++;
@@ -438,7 +458,32 @@ paracode (int sockfd)
 	  if (path_through)
 	    stick = (float) get_stick ();
 	  else if (liftup)
-	    stick = 0.9*stick_last + 0.1*((float) get_stick ());
+	    {
+	      stick = 0.9*stick_last + 0.1*((float) get_stick ());
+	      if (althold)
+		{
+		  float alterr = target_alt - 100*vertical_position;
+		  float adj = base_alt_adjust;
+		  float pv = alterr;
+		  float dv = altp-alterr;
+		  altp = alterr;
+		  altd = dv;
+		  adj = (1-0.9)*(pv*0.8-dv*8)*0.5 + 0.9*adj;
+		  if (adj > 50)
+		    adj = 50;
+		  else if (adj < -50)
+		    adj = -50;
+		  last_alt_adjust = adj;
+		  if ((count % (PWM_PERIOD * BCOUNT)) == 0)
+		    base_alt_adjust = adj;
+		  if (stick - STICK_MID > -100
+		      && stick - STICK_MID < 100)
+		    stick_adj = adj;
+		  else
+		    stick_adj = 0;
+		  //printf("alterr %7.3f alt adjust %7.3f stick %7.3f\n", alterr, stick_adj, stick);
+		}
+	    }
 	  else
 	    {
 	      stick = (1-DRATE)*stick_last + DRATE*MIN_WIDTH;
@@ -560,10 +605,10 @@ paracode (int sockfd)
 	  float mt[4];
 	  int rt, pt, yt;
 	  get_tilt (&rt, &pt, &yt);
-	  mt[0] =  TILT_COEFF * (-rt + pt + yt); // M1 right head
-	  mt[1] =  TILT_COEFF * ( rt - pt + yt); // M2 left  tail
-	  mt[2] =  TILT_COEFF * ( rt + pt - yt); // M3 left  head
-	  mt[3] =  TILT_COEFF * (-rt - pt - yt); // M4 right tail
+	  mt[0] =  stick_adj + TILT_COEFF * (-rt + pt + yt); // M1 right head
+	  mt[1] =  stick_adj + TILT_COEFF * ( rt - pt + yt); // M2 left  tail
+	  mt[2] =  stick_adj + TILT_COEFF * ( rt + pt - yt); // M3 left  head
+	  mt[3] =  stick_adj + TILT_COEFF * (-rt - pt - yt); // M4 right tail
 
 	  if (path_through
 	      || count < FILTER_STABILIZE_COUNT)
@@ -583,6 +628,7 @@ paracode (int sockfd)
 	      last_width[1] = stick + mt[1] + last_adjust[1] + mot_trim[1];
 	      last_width[2] = stick + mt[2] + last_adjust[2] + mot_trim[2];
 	      last_width[3] = stick + mt[3] + last_adjust[3] + mot_trim[3];
+	      //printf("width0 %7.3f\n", last_width[0]);
 	    }
 
 	  set_width (&pkt.data[0], last_width[0]);
@@ -660,18 +706,28 @@ main (int argc, char *argv[])
 		  "  -Q Show computed quaternion\n"
 		  "  -Z Show computed vertical accelaration\n"
 		  "  -Y Show computed yaw (rad.)\n"
-		  "  -b Show barometer estimated altitude\n"
+		  "  -V Show estimated vertical info\n"
 		  "\nMotor options:\n"
 		  "  -s Enable motor spin\n"
 		  "  -p Pass through joystick to pwm\n"
 		  "  -p[0-3] Spin moter[0-3] only with pass through\n"
 		  "  -l RGB_VALUE    Set RGB LED value (0-7)\n"
 		  "  -t[0-3] INT_VALUE  Set motor[0-3] trim value(-50 to 50)\n"
+		  "  -a TARGET_ALT   Set target altitude in cm(0 to 200)\n"
 		  "\nFilter options:\n"
 		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
 		  "  -c FLOAT_VALUE  Set control gain to FLOAT_VALUE\n"
 		  );
 	  exit (1);
+
+	case 'a':	/* next arg is altitude */
+	  if (--argc <=0)
+	    err_quit("-a requires another argument");
+	  target_alt = atof(*++argv);
+	  if (target_alt < 0 || target_alt > 200)
+	    err_quit("target altitude should be less than 200cm");
+	  althold = true;
+	  break;
 
 	case 'c':	/* next arg is gain */
 	  if (--argc <=0)
@@ -773,8 +829,8 @@ main (int argc, char *argv[])
 	  show_flags |= SHOW_ACCZ;
 	  break;
 
-	case 'b':
-	  show_flags |= SHOW_BALT;
+	case 'V':
+	  show_flags |= SHOW_VERT;
 	  break;
 
 	default:
