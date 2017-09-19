@@ -270,9 +270,8 @@ static float last_width[4];
 #define YAWERR_LIMIT 0.4f
 
 static bool althold = true;
-static float target_alt = 100.0f;
+static float target_alt = 20.0f;
 static float base_alt_adjust;
-static float last_alt_adjust;
 
 static volatile sig_atomic_t interrupted;
 
@@ -460,28 +459,36 @@ paracode (int sockfd)
 	  else if (liftup)
 	    {
 	      stick = 0.9*stick_last + 0.1*((float) get_stick ());
-	      if (althold)
+	      if (althold && count > FILTER_STABILIZE_COUNT)
 		{
 		  float alterr = target_alt - 100*vertical_position;
 		  float adj = base_alt_adjust;
 		  float pv = alterr;
-		  float dv = altp-alterr;
+		  float dv = 100*vertical_velocity;
 		  altp = alterr;
 		  altd = dv;
-		  adj = (1-0.9)*(pv*0.8-dv*8)*0.5 + 0.9*adj;
+		  adj = (1-0.9)*(pv*0.8-dv*8) + 0.9*adj;
 		  if (adj > 50)
 		    adj = 50;
 		  else if (adj < -50)
 		    adj = -50;
-		  last_alt_adjust = adj;
 		  if ((count % (PWM_PERIOD * BCOUNT)) == 0)
 		    base_alt_adjust = adj;
 		  if (stick - STICK_MID > -100
 		      && stick - STICK_MID < 100)
 		    stick_adj = adj;
 		  else
-		    stick_adj = 0;
-		  //printf("alterr %7.3f alt adjust %7.3f stick %7.3f\n", alterr, stick_adj, stick);
+		    {
+		      stick_adj = 0;
+		      // max +-40cm/s
+		      float accel = (stick - STICK_MID)*0.001;
+		      target_alt += accel;
+		      if (target_alt > 200)
+			target_alt = 200;
+		      else if (target_alt < 0)
+			target_alt = 0;
+		    }
+		  //printf("Dalt %7.3f alterr %7.3f adjust %7.3f stick %7.3f\n", target_alt, alterr, stick_adj, stick);
 		}
 	    }
 	  else
@@ -713,7 +720,7 @@ main (int argc, char *argv[])
 		  "  -p[0-3] Spin moter[0-3] only with pass through\n"
 		  "  -l RGB_VALUE    Set RGB LED value (0-7)\n"
 		  "  -t[0-3] INT_VALUE  Set motor[0-3] trim value(-50 to 50)\n"
-		  "  -a TARGET_ALT   Set target altitude in cm(0 to 200)\n"
+		  "  -a      AltHold\n"
 		  "\nFilter options:\n"
 		  "  -g FLOAT_VALUE  Set filter gain to FLOAT_VALUE\n"
 		  "  -c FLOAT_VALUE  Set control gain to FLOAT_VALUE\n"
@@ -721,11 +728,6 @@ main (int argc, char *argv[])
 	  exit (1);
 
 	case 'a':	/* next arg is altitude */
-	  if (--argc <=0)
-	    err_quit("-a requires another argument");
-	  target_alt = atof(*++argv);
-	  if (target_alt < 0 || target_alt > 200)
-	    err_quit("target altitude should be less than 200cm");
 	  althold = true;
 	  break;
 
