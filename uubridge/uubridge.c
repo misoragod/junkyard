@@ -163,9 +163,9 @@ _start (void)
   LPC_SYSCON->PRESETCTRL &= ~((1 << 8)|(3 << 3));
   LPC_SYSCON->PRESETCTRL |= ((1 << 8)|(3 << 3));
 
-  // Enable U0-RXD on PIO0_6 PINASSIGN0(15:8)
-  // Enable U0-TXD on PIO0_7 PINASSIGN0(7:0)
-  LPC_SWM->PINASSIGN0 = 0xffff0607;
+  // Enable U0-TXD on PIO0_6 PINASSIGN0(15:8)
+  // Enable U0-RXD on PIO0_7 PINASSIGN0(7:0)
+  LPC_SWM->PINASSIGN0 = 0xffff0706;
   // Enable U1-RTS on PIO0_12 PINASSIGN1(31:24)
   // Enable U1-RXD on PIO0_8 PINASSIGN1(23:16)
   // Enable U1-TXD on PIO0_9 PINASSIGN1(15:8)
@@ -173,8 +173,8 @@ _start (void)
   // Enable U1-CTS on PIO0_13 PINASSIGN2(7:0)
   LPC_SWM->PINASSIGN2 = 0xffffff0d;
 
-  // Enable SCIN_0 on PIO0_6 PINASSIGN5(31:24) i.e. same with U0-RXD
-  LPC_SWM->PINASSIGN5 = 0x06ffffff;
+  // Enable SCIN_0 on PIO0_7 PINASSIGN5(31:24) i.e. same with U0-RXD
+  LPC_SWM->PINASSIGN5 = 0x07ffffff;
 
   // UARTs baud rate
   LPC_SYSCON->UARTCLKDIV = 1;
